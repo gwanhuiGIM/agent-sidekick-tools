@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Sub Display</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<style>
+  /* 색은 손쓸 일에만: --attn 완료(done), --warn 캐시 만료 임박, --other 급함(만료·D-3·연결 끊김). 나머지는 무채색 */
+  :root { --bg:#111418; --panel:#1a1f26; --line:#2a313b; --fg:#e6e9ee; --dim:#8a93a0; --mid:#aab2bd;
+          --attn:#4fb3a9; --attn-bg:rgba(79,179,169,.10); --idle:#5b6573; --chip:rgba(230,233,238,.12); --other:#ec6a62; --series:#5aa9e6; --warn:#ff8a3d; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.4 system-ui, sans-serif; }
+  ::placeholder { color:var(--dim); }
+  header { display:flex; gap:16px; align-items:baseline; padding:12px 20px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:18px; margin:0; }
+  #clock { font-variant-numeric:tabular-nums; color:var(--dim); margin-left:auto; }
+  #conn { color:var(--dim); }
+  #conn::before { content:''; display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--dim); margin-right:6px; vertical-align:1px; }
+  #conn.bad { color:var(--other); font-weight:600; }
+  #conn.bad::before { background:var(--other); }
+  /* 연결 끊김: 화면을 흐리게 하고 움직임을 멈춰 '살아 있는 데이터'로 보이지 않게 */
+  #offline { display:none; position:fixed; top:8px; left:50%; transform:translateX(-50%); z-index:1; padding:6px 16px; border-radius:8px; border:1px solid var(--other); background:var(--bg); color:var(--other); font-weight:600; white-space:nowrap; }
+  body.offline #offline { display:block; }
+  body.offline main { opacity:.4; }
+  body.offline main * { animation:none !important; }
+  main { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:16px; padding:16px; align-items:start; }
+  @media (max-width:800px) { main { grid-template-columns:minmax(0,1fr); } }
+  section, details { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px 16px; min-width:0; }
+  h2 { font-size:14px; color:var(--dim); margin:0 0 8px; font-weight:600; }
+  h2 b { color:var(--fg); }
+  #acct { float:right; font-weight:400; white-space:nowrap; }
+  .nw { white-space:nowrap; }  /* 제목이 접힐 때 '만료 임박 0'처럼 이름과 개수가 갈라지지 않게 */
+  summary, .tog { cursor:pointer; list-style:none; }
+  summary::-webkit-details-marker { display:none; }
+  summary h2 { display:inline; }
+  summary::before, .tog::before { content:'▸'; color:var(--dim); display:inline-block; width:18px; transition:transform .15s; }
+  details[open] summary::before, .fold.open .tog::before { transform:rotate(90deg); }
+  details[open] summary { margin-bottom:8px; }
+  /* 접는 패널: 접어도 .more만 숨긴다(그래프·마감 임박 공고는 남김) */
+  .fold:not(.open) .more { display:none; }
+  ul { list-style:none; margin:0; padding:0; }
+  li { display:flex; align-items:center; gap:12px; padding:6px 0; border-bottom:1px solid var(--line); }
+  li:last-child { border-bottom:0; }
+  .box { width:28px; height:28px; flex:none; border:2px solid var(--dim); border-radius:6px; background:none; color:var(--dim); font-size:16px; cursor:pointer; }
+  .done .box { border-color:var(--line); }
+  .done .text { color:var(--dim); text-decoration:line-through; }
+  .text { flex:1; min-width:0; overflow-wrap:anywhere; cursor:text; }
+  /* 긴 글은 줄바꿈하지 않고 … — 전체는 길게 눌러(title) 보거나 체크리스트는 탭해 수정창에서 */
+  #list .text, .aline > span, .text > .meta, .text > .cache { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  /* 체크리스트 순서 바꾸기: ≡ 손잡이를 끌어 놓는다(터치는 pointer 이벤트 — HTML5 drag는 태블릿에서 안 됨) */
+  .grip { flex:none; color:var(--dim); font-size:18px; padding:0 2px; cursor:grab; touch-action:none; user-select:none; -webkit-user-select:none; }
+  #list li.dragging { opacity:.4; }
+  #list li.drop-before { box-shadow:inset 0 3px 0 var(--fg); }
+  #list li.drop-after { box-shadow:inset 0 -3px 0 var(--fg); }
+  .del { background:none; border:0; color:var(--dim); font-size:20px; cursor:pointer; padding:0 4px; }
+  form { display:flex; gap:8px; margin-top:12px; }
+  form input { flex:1; min-width:0; font:inherit; padding:10px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--fg); }
+  form button { font:inherit; padding:10px 16px; border-radius:8px; border:1px solid var(--line); background:none; color:var(--fg); }
+  /* 에이전트 행: 완료(done)는 옅은 배경으로 띄우고, 작업 중은 회색으로 물러나게 */
+  #agents li, #expired li { padding:6px 8px; border-radius:8px; }
+  .dot { width:14px; height:14px; border-radius:50%; flex:none; background:var(--other); }
+  .s-done { background:var(--attn-bg); }
+  .s-done .dot { background:var(--attn); }
+  .s-working .dot { width:10px; height:10px; margin:0 2px; background:var(--idle); animation:ring 2.4s ease-out infinite; }
+  .s-warn .dot { background:none; border:3px solid var(--warn); animation:ring-warn 1.6s ease-out infinite; }
+  @keyframes ring { 0% { box-shadow:0 0 0 0 rgba(138,147,160,.5); } 100% { box-shadow:0 0 0 7px rgba(138,147,160,0); } }
+  @keyframes ring-warn { 0% { box-shadow:0 0 0 0 rgba(255,138,61,.45); } 100% { box-shadow:0 0 0 7px rgba(255,138,61,0); } }
+  @media (prefers-reduced-motion:reduce) { * { animation:none !important; } }
+  /* 윗줄 cwd · 탭 · 이름을 칸으로 나눠 행끼리 자리를 맞춘다 — 칸 너비는 alignCols()가 진행 중 목록과 만료 묶음을 합쳐 가장 긴 값으로 정한다 */
+  .aline { display:flex; gap:12px; align-items:baseline; }
+  .c-cwd, .c-tab { flex:none; max-width:30%; }
+  .c-cwd { min-width:var(--w-cwd, 0); } .c-tab { min-width:var(--w-tab, 0); }
+  .c-name { flex:1; min-width:0; }
+  .c-tab, .c-name { border-left:3px double var(--mid); padding-left:12px; }  /* 칸 구분선(두 줄, 밝은 회색) — 행마다 같은 x라 세로로 맞는다 */
+  /* cwd·탭 칸은 옅은 배경으로 칩처럼 — 구분선 오른쪽에서 시작(왼쪽 모서리는 직각) */
+  .c-cwd, .c-tab { background:var(--chip); padding:0 8px; border-radius:6px; }  /* --chip: 글자색 12% — 완료 행의 청록 배경 위에서도 보이게 */
+  .c-tab { border-radius:0 6px 6px 0; }
+  .meta { color:var(--dim); font-size:12px; }
+  .status { margin-left:auto; font-size:12px; color:var(--dim); white-space:nowrap; }
+  .s-done .status { color:var(--attn); font-weight:600; }
+  .s-warn .status { color:var(--warn); font-weight:600; }
+  .s-expired .status { color:var(--other); }
+  #ndone.on { color:var(--attn); }
+  #nwarn.on { color:var(--warn); }
+  details.sub { background:none; border:0; border-top:1px solid var(--line); border-radius:0; padding:8px 0 0; margin-top:4px; }
+  .err { color:var(--other); font-size:12px; }
+  .cache { font-size:12px; color:var(--dim); font-variant-numeric:tabular-nums; }
+  .cache.warn { color:var(--warn); font-weight:600; }
+  .cache.expired { color:var(--other); }
+  #toast { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); background:var(--other); color:#fff; padding:8px 16px; border-radius:8px; display:none; }
+
+  /* PC 사용량 */
+  .charts { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:12px; }
+  .chart { position:relative; }
+  .chart .head { display:flex; align-items:baseline; gap:8px; font-size:12px; color:var(--dim); }
+  .chart .now { margin-left:auto; color:var(--fg); font-size:18px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .chart svg { display:block; width:100%; height:96px; touch-action:none; }
+  .chart .grid { stroke:var(--line); stroke-width:1; }
+  .chart .axis { fill:var(--dim); font-size:9px; }
+  .chart .ln { fill:none; stroke:var(--series); stroke-width:2; stroke-linejoin:round; stroke-linecap:round; }
+  .chart .area { fill:var(--series); opacity:.12; }
+  .chart .hair { stroke:var(--dim); stroke-width:1; }
+  .chart .pt { fill:var(--series); stroke:var(--panel); stroke-width:2; }
+  .tip { position:absolute; top:22px; pointer-events:none; background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:2px 8px; font-size:11px; white-space:nowrap; display:none; }
+  .tip b { font-variant-numeric:tabular-nums; }
+  .procs li { gap:10px; padding:3px 0; font-size:13px; }
+  .procs .pname { width:38%; flex:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .procs .bar { flex:1; height:8px; background:var(--bg); border-radius:4px; overflow:hidden; }
+  .procs .bar i { display:block; height:100%; background:var(--series); border-radius:4px; }
+  .procs .num { width:84px; flex:none; text-align:right; font-variant-numeric:tabular-nums; }
+  .procs .cpu { width:64px; flex:none; text-align:right; color:var(--dim); font-variant-numeric:tabular-nums; }
+
+  /* 공고: 한 줄 = 회사·직무 | JD | 회사 | 자소서 | 마감 */
+  .posts li { gap:8px; padding:4px 0; font-size:14px; }
+  .posts .co { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .posts .co b { font-weight:600; }
+  .posts .co .meta { margin-left:6px; }
+  .mark { width:48px; flex:none; text-align:center; font-weight:700; }
+  /* 공고 기호는 명암만 — 빨강은 마감 임박(D-3 이하)에 남겨 둔다 */
+  .mark.full { color:var(--fg); }
+  .mark.partial { color:var(--mid); }
+  .mark.none { color:var(--dim); font-weight:400; }
+  /* 회사정보·자소서 사이: JD·회사정보 둘 다 O면 '자료 준비 끝 → 자소서 착수 가능' 화살표(청록 칩 — 손쓸 일), 아니면 흐린 구분자 */
+  .go { width:36px; flex:none; text-align:center; color:var(--dim); line-height:1; }
+  .go.ready { color:var(--attn); background:var(--attn-bg); border:1px solid var(--attn); border-radius:6px;
+              font-size:22px; font-weight:800; padding:1px 0 3px; }
+  .posts li.head { padding:0 0 4px; font-size:11px; color:var(--dim); }
+  .posts li.head .mark { font-weight:400; }
+  .dday { width:72px; flex:none; text-align:right; font-size:12px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .dday.soon { color:var(--other); }
+  .dday.none { color:var(--dim); font-weight:400; }
+</style>
+</head>
+<body>
+<header><h1>Sub Display</h1><span id="conn" title="서버 연결">-</span><span class="meta" id="file"></span><span id="clock"></span></header>
+<div id="offline" role="status"></div>
+<main>
+  <section>
+    <h2><span class="meta" id="acct" title="지금 로그인된 Claude 계정 · 5시간 사용량 · 주간 사용량"></span>herdr — <span class="nw">완료 <b id="ndone">-</b></span> · <span class="nw">작업 중 <b id="nwork">-</b></span> · <span class="nw">만료 임박 <b id="nwarn">-</b></span> <span class="meta nw" id="nidle"></span></h2>
+    <div class="err" id="aerr"></div>
+    <ul id="agents"></ul>
+    <details id="expbox" class="sub" hidden><summary><span class="meta">캐시 만료된 대기 세션 <b id="nexp">0</b> — 이어가려면 먼저 /compact</span></summary><ul id="expired"></ul></details>
+  </section>
+  <section>
+    <h2>체크리스트 — 남은 항목 <b id="left">-</b></h2>
+    <ul id="list"></ul>
+    <form id="add"><input name="text" placeholder="항목 추가" autocomplete="off"><button>추가</button></form>
+  </section>
+  <section id="sysbox" class="fold open">
+    <h2 class="tog">PC 사용량 — CPU <b id="cpunow">-</b> · 메모리 <b id="memnow">-</b> <span class="meta" id="load"></span></h2>
+    <div class="charts"><div class="chart" id="c-cpu"></div><div class="chart" id="c-mem"></div></div>
+    <div class="more">
+      <h2 style="margin-top:12px">메모리 상위 프로세스 (이름별 합계 · 막대는 전체 RAM 대비 · 오른쪽은 CPU)</h2>
+      <ul class="procs" id="procs"></ul>
+    </div>
+  </section>
+  <section id="postbox" class="fold open">
+    <h2 class="tog">공고 — 남은 <b id="npost">-</b> · 자소서 초안 <b id="ndraft">-</b></h2>
+    <div class="err" id="perr"></div>
+    <ul class="posts" id="posts"></ul>
+    <div class="meta more" style="margin-top:6px">O 충분 · △ 일부(JD: 업무·자격 중 빠짐 / 회사정보: 500자 미만) · X 없음 · <b style="color:var(--attn)">→</b> JD·회사정보 모두 O(자소서 착수 가능) · 길게 누르면 근거</div>
+  </section>
+</main>
+<div id="toast"></div>
+<script>
+const ORDER = { done: 0, working: 1 };
+const LABEL = { done: '완료', working: '작업 중', idle: '대기' };
+const FILL = { full: 'O', partial: '△', none: 'X' };
+const SVG = 'http://www.w3.org/2000/svg';
+const $ = id => document.getElementById(id);
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const sv = (tag, attrs) => { const e = document.createElementNS(SVG, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; };
+
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.style.display = 'block'; setTimeout(() => t.style.display = 'none', 2500); }
+
+// 접힘 상태는 기기별 편의 기능이라 localStorage에 둔다 (막혀 있으면 기본값 펼침)
+for (const d of document.querySelectorAll('details')) {
+  try { const v = localStorage.getItem('open:' + d.id); if (v) d.open = v === '1'; } catch {}  // 저장값 없으면 HTML 기본값(open 여부)
+  d.addEventListener('toggle', () => { try { localStorage.setItem('open:' + d.id, d.open ? '1' : '0'); } catch {} });
+}
+// PC 사용량·공고는 details 대신 .fold — details는 접으면 내용 전부를 숨겨서, 접어도 남길 부분이 있는 패널은 클래스로 접는다
+for (const f of document.querySelectorAll('.fold')) {
+  try { const v = localStorage.getItem('open:' + f.id); if (v) f.classList.toggle('open', v === '1'); } catch {}  // 키는 details 시절과 같다
+  f.querySelector('.tog').onclick = () => { const o = f.classList.toggle('open'); try { localStorage.setItem('open:' + f.id, o ? '1' : '0'); } catch {} };
+}
+
+async function send(op) {
+  let r, s;  // 네트워크 실패(요청·본문 읽기)만 잡는다 — render 오류까지 '연결 실패'로 덮지 않게
+  try {
+    r = await fetch('/api/checklist', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(op) });
+    if (r.ok || r.status === 409) s = await r.json();
+  } catch { toast('저장 실패 — 서버에 연결할 수 없음'); return; }
+  if (r.status === 409) toast('파일이 다른 곳에서 바뀌었습니다 — 새로 불러옴');
+  else if (!r.ok) { toast('저장 실패 ' + r.status); return; }
+  render(s); online();
+}
+
+// 시계열 한 개짜리 선 그래프(0~100%). 구조는 한 번 만들고 render마다 선만 바꾼다 — 호버 중에도 끊기지 않게
+function makeChart(root, title) {
+  const W = 300, H = 96, T = 6, B = 16;  // viewBox 좌표, 아래 16은 시각 라벨 자리
+  const y = v => T + (H - T - B) * (1 - v / 100);
+  const head = el('div', 'head'); const now = el('span', 'now', '-');
+  head.append(el('span', '', title), now);
+  const svg = sv('svg', { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', role: 'img', 'aria-label': title + ' 최근 5분' });
+  for (const v of [0, 50, 100]) svg.append(sv('line', { class: 'grid', x1: 0, x2: W, y1: y(v), y2: y(v), 'vector-effect': 'non-scaling-stroke' }));
+  const area = sv('path', { class: 'area' }), ln = sv('path', { class: 'ln', 'vector-effect': 'non-scaling-stroke' });
+  const hair = sv('line', { class: 'hair', y1: T, y2: H - B, visibility: 'hidden', 'vector-effect': 'non-scaling-stroke' });
+  svg.append(area, ln, hair);
+  const t0 = el('span', 'axis'), t1 = el('span', 'axis');
+  const axis = el('div', 'meta'); axis.style.cssText = 'display:flex;justify-content:space-between;font-size:9px;margin-top:-14px';
+  axis.append(t0, t1);
+  const tip = el('div', 'tip');
+  root.append(head, svg, axis, tip);
+  let pts = [];
+  const x = i => pts.length < 2 ? W : W * i / (pts.length - 1);
+  function hover(ev) {
+    if (!pts.length) return;
+    const r = svg.getBoundingClientRect();
+    const i = Math.max(0, Math.min(pts.length - 1, Math.round((ev.clientX - r.left) / r.width * (pts.length - 1))));
+    hair.setAttribute('x1', x(i)); hair.setAttribute('x2', x(i)); hair.setAttribute('visibility', 'visible');
+    tip.replaceChildren(el('b', '', pts[i][1].toFixed(1) + '%'), document.createTextNode(' ' + pts[i][0]));
+    tip.style.display = 'block';
+    tip.style.left = Math.min(r.width - tip.offsetWidth, Math.max(0, x(i) / W * r.width - tip.offsetWidth / 2)) + 'px';
+  }
+  svg.addEventListener('pointermove', hover);
+  svg.addEventListener('pointerdown', hover);
+  svg.addEventListener('pointerleave', () => { hair.setAttribute('visibility', 'hidden'); tip.style.display = 'none'; });
+  return series => {  // series = [[시각, 값], ...]
+    pts = series;
+    if (!pts.length) { now.textContent = '수집 중'; ln.setAttribute('d', ''); area.setAttribute('d', ''); return; }
+    const d = pts.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p[1]).toFixed(1)}`).join('');
+    ln.setAttribute('d', d);
+    area.setAttribute('d', `${d}L${x(pts.length - 1)},${y(0)}L${x(0)},${y(0)}Z`);
+    now.textContent = pts[pts.length - 1][1].toFixed(0) + '%';
+    t0.textContent = pts[0][0].slice(0, 5); t1.textContent = pts[pts.length - 1][0].slice(0, 5);
+  };
+}
+const cpuChart = makeChart($('c-cpu'), 'CPU'), memChart = makeChart($('c-mem'), '메모리');
+
+function renderSys(s) {
+  const last = s.hist[s.hist.length - 1];
+  $('cpunow').textContent = last ? last[1].toFixed(0) + '%' : '-';
+  $('memnow').textContent = last ? last[2].toFixed(0) + '%' : '-';
+  $('load').textContent = `load ${s.load.join(' ')} / ${s.ncpu}코어`;
+  cpuChart(s.hist.map(h => [h[0], h[1]]));
+  memChart(s.hist.map(h => [h[0], h[2]]));
+  $('procs').replaceChildren(...(s.top.length ? s.top.map(p => {
+    const li = el('li'); const bar = el('span', 'bar'); const fill = el('i');
+    fill.style.width = Math.min(100, 100 * p.rss / s.mem_total) + '%'; bar.append(fill);
+    li.append(el('span', 'pname', p.count > 1 ? `${p.name} ×${p.count}` : p.name), bar,
+              el('span', 'num', p.rss >= 1024 ? (p.rss / 1024).toFixed(1) + ' GiB' : p.rss + ' MiB'),
+              el('span', 'cpu', p.cpu.toFixed(1) + '%'));
+    return li;
+  }) : [el('li', 'meta', `첫 샘플까지 ${s.interval}초`)]));
+}
+
+function mark(f) {
+  const m = el('span', 'mark ' + f.state, FILL[f.state]);
+  m.title = f.why;
+  return m;
+}
+
+const URGENT_DAYS = 10;  // 마감이 이 일수 이상 남으면 덜 급하다 — 접은 칸을 상시모집 공고에 내준다
+const always = p => p.folder.startsWith('00_');  // 상시모집 공고는 폴더 이름이 00_으로 시작
+function renderPosts(posts, err) {
+  $('perr').textContent = err || '';
+  $('npost').textContent = posts.length;
+  $('ndraft').textContent = `${posts.filter(p => p.draft.files.length).length}/${posts.length}`;
+  const head = el('li', 'head');
+  head.append(el('span', 'co', '회사 · 직무'), el('span', 'mark', 'JD'), el('span', 'mark', '회사정보'), el('span', 'go'), el('span', 'mark', '자소서'), el('span', 'dday none', '마감'));
+  // 접었을 때 남길 3칸 — 마감이 지나지 않고 D-10 미만인 공고(가까운 순, 서버가 이미 마감순 정렬)를 먼저,
+  // 남는 칸은 JD가 O·△인 상시모집 공고로 채운다
+  const urgent = posts.filter(p => p.dday != null && p.dday >= 0 && p.dday < URGENT_DAYS);
+  const ready = posts.filter(p => always(p) && p.jd.state !== 'none');
+  const top = new Set([...urgent, ...ready].slice(0, 3));
+  $('posts').replaceChildren(head, ...posts.map(p => {
+    const li = el('li', top.has(p) ? '' : 'more');
+    const co = el('span', 'co'); co.append(el('b', '', p.company));
+    const sub = [p.position, p.status].filter(Boolean).join(' · ');
+    if (sub) co.append(el('span', 'meta', sub));
+    co.title = [p.company, sub].filter(Boolean).join(' · ');  // 잘린 글자는 길게 눌러 보기
+    const dd = p.dday == null ? el('span', 'dday none', '미정')
+             : el('span', 'dday' + (p.dday <= 3 ? ' soon' : ''), p.dday > 0 ? `D-${p.dday}` : p.dday === 0 ? 'D-day' : `D+${-p.dday}`);
+    if (p.deadline) dd.title = p.deadline;
+    const dr = mark({ state: p.draft.files.length ? 'full' : 'none' });
+    dr.title = p.draft.files.length ? `${p.draft.files.join(', ')} · ${p.draft.chars.toLocaleString()}자` : `${p.folder}에 자기소개서*.md 없음`;
+    const ok = p.jd.state === 'full' && p.company_info.state === 'full';  // 자소서 착수 가능 = JD·회사정보 둘 다 O
+    const go = el('span', 'go' + (ok ? ' ready' : ''), ok ? '→' : '·');
+    go.title = ok ? 'JD·회사정보 모두 O — 자소서 착수 가능' : 'JD·회사정보가 모두 O가 아님 — 자소서 착수 조건 미충족';
+    li.append(co, mark(p.jd), mark(p.company_info), go, dr, dd);
+    return li;
+  }));
+}
+
+const dur = sec => sec < 60 ? '방금' : sec < 3600 ? `${Math.floor(sec / 60)}분` : `${Math.floor(sec / 3600)}시간 ${Math.floor(sec % 3600 / 60)}분`;
+// 마지막 답변부터 잰 prompt cache 상태 — warn이면 만료 전에 compact하거나 이어서 입력, expired면 다음 입력이 context 전체를 다시 처리
+function cacheLine(c) {
+  const k = Math.round(c.ctx / 1000) + 'k';
+  const text = c.compacted ? `답변 ${dur(c.age)} 전 · compact됨`
+             : c.level === 'warn' ? `⚠ 캐시 ${Math.max(1, Math.ceil(c.left / 60))}분 남음 · ${k} — compact 또는 이어서 입력`
+             : c.level === 'expired' ? `캐시 만료(답변 ${dur(c.age)} 전) · 다음 입력 때 ${k} 다시 처리`
+             : `답변 ${dur(c.age)} 전 · ${k}`;
+  return el('div', 'cache ' + c.level, text);
+}
+
+function render(s) {
+  $('file').textContent = s.file.split('/').pop();
+  $('clock').textContent = s.now;
+  const items = [...s.checklist].sort((a, b) => a.done - b.done);
+  $('left').textContent = items.filter(i => !i.done).length;
+  if (!drag) $('list').replaceChildren(...items.map(i => {  // 끄는 중엔 3초 poll이 목록을 갈아엎지 않게
+    const li = el('li', i.done ? 'done' : '');
+    li._item = i;
+    const grip = el('span', 'grip', '≡');
+    grip.title = '끌어서 순서 바꾸기';
+    grip.onpointerdown = ev => startDrag(ev, li);
+    const box = el('button', 'box', i.done ? '✓' : '');
+    box.onclick = () => send({ action: 'toggle', line: i.line, expect: i.raw });
+    const text = el('span', 'text', i.text);
+    text.title = i.text;
+    text.onclick = () => { const v = prompt('항목 수정', i.text); if (v && v !== i.text) send({ action: 'edit', line: i.line, expect: i.raw, text: v }); };
+    const del = el('button', 'del', '×');
+    del.onclick = () => confirm(`삭제: ${i.text}`) && send({ action: 'delete', line: i.line, expect: i.raw });
+    li.append(grip, box, text, del);
+    return li;
+  }));
+  // idle 에이전트는 목록에서 뺀다 — 개수만 제목 옆에. 단 cache 만료 임박(warn)이면 지금 손쓸 수 있어 보이고 맨 위로
+  const warn = a => a.cache?.level === 'warn';
+  const expired = s.agents.filter(a => a.status === 'idle' && a.cache?.level === 'expired').sort((a, b) => a.cache.age - b.cache.age);
+  const idle = s.agents.filter(a => a.status === 'idle' && !warn(a)).length - expired.length;
+  const agents = s.agents.filter(a => a.status !== 'idle' || warn(a))
+    .sort((a, b) => warn(b) - warn(a) || (ORDER[a.status] ?? 2) - (ORDER[b.status] ?? 2) || b.seq - a.seq);
+  const ndone = agents.filter(a => a.status === 'done' && !warn(a)).length;  // 만료 임박 줄은 그쪽 개수로만 센다
+  const nwarn = agents.filter(warn).length;
+  $('ndone').textContent = ndone; $('ndone').classList.toggle('on', ndone > 0);
+  $('nwork').textContent = agents.filter(a => a.status === 'working' && !warn(a)).length;
+  $('nwarn').textContent = nwarn; $('nwarn').classList.toggle('on', nwarn > 0);
+  $('nidle').textContent = idle ? `(대기 ${idle} 숨김)` : '';
+  $('aerr').textContent = s.agents_error || '';
+  // 계정 뒤 Claude 사용량(5h·주간) — 서버가 indicator 파일을 읽어 준다. 없거나 오래됐으면 계정만
+  $('acct').textContent = [s.account, s.quota && `${s.quota['5h']}% · ${s.quota['7d']}%`].filter(Boolean).join(' · ');
+  // 만료 임박은 working·done처럼 상태 자체로 띄운다 — 원래 상태는 이름 아래 줄에
+  const row = (a, cls, status) => {
+    const li = el('li', 's-' + cls);
+    const body = el('div', 'text');
+    const name = el('div', 'aline');
+    name.append(el('span', 'c-cwd', a.cwd), el('span', 'c-tab', a.tab), el('span', 'c-name', a.name));
+    name.title = [a.cwd, a.tab, a.name].join(' · ');  // 잘린 글자는 길게 눌러 보기
+    const sub = el('div', 'meta', a.agent + (cls !== a.status ? ` · ${LABEL[a.status] ?? a.status}` : ''));
+    sub.title = sub.textContent;
+    body.append(name, sub);
+    if (a.cache) { const c = cacheLine(a.cache); c.title = c.textContent; body.append(c); }
+    li.append(el('span', 'dot'), body, el('span', 'status', status));
+    return li;
+  };
+  $('agents').replaceChildren(...agents.map(a => warn(a) ? row(a, 'warn', `캐시 ${Math.max(1, Math.ceil(a.cache.left / 60))}분`) : row(a, a.status, LABEL[a.status] ?? a.status)));
+  // 만료된 idle 세션은 접힌 묶음으로만 — 펼치면 최근에 만료된 순
+  $('expbox').hidden = !expired.length;
+  $('nexp').textContent = expired.length;
+  $('expired').replaceChildren(...expired.map(a => row(a, 'expired', '만료')));
+  alignCols($('agents'), $('expired'));
+  if (s.sys) renderSys(s.sys);  // 이전 버전 서버(재시작 전)는 sys·postings가 없다
+  if (s.postings) renderPosts(s.postings, s.postings_error);
+}
+
+// 체크리스트 끌어 옮기기 — 같은 묶음(미완료끼리·완료끼리) 안에서만. 화면 순서 = 묶음 안 파일 순서라,
+// 아래로 끌면 놓은 항목 뒤·위로 끌면 앞(서버 move와 같은 규칙)
+let drag = null;
+function startDrag(ev, li) {
+  ev.preventDefault();
+  const grip = ev.currentTarget; grip.setPointerCapture(ev.pointerId);
+  const rows = [...$('list').children], from = rows.indexOf(li);
+  drag = { li, target: null };
+  li.classList.add('dragging');
+  const clear = () => rows.forEach(r => r.classList.remove('drop-before', 'drop-after'));
+  grip.onpointermove = e => {
+    clear(); drag.target = null;
+    const over = document.elementFromPoint(e.clientX, e.clientY)?.closest('#list li');
+    if (!over || over === li || over._item.done !== li._item.done) return;
+    drag.target = over;
+    over.classList.add(rows.indexOf(over) > from ? 'drop-after' : 'drop-before');
+  };
+  grip.onpointerup = grip.onpointercancel = e => {
+    grip.onpointermove = grip.onpointerup = grip.onpointercancel = null;
+    clear(); li.classList.remove('dragging');
+    const t = e.type === 'pointerup' && drag.target; drag = null;
+    if (t) send({ action: 'move', line: li._item.line, expect: li._item.raw, to: t._item.line, to_expect: t._item.raw });
+  };
+}
+
+// 진행 중 목록과 만료 묶음의 cwd·탭 칸 너비를 둘을 합쳐 가장 긴 값에 맞춘다 — 두 목록이 같은 자리에 줄선다
+// (만료 묶음은 접혀 있으면 0으로 재지므로 펼칠 때 다시 잰다)
+function alignCols(...uls) {
+  for (const k of ['cwd', 'tab']) {
+    uls.forEach(u => u.style.removeProperty('--w-' + k));
+    const w = Math.max(0, ...uls.flatMap(u => [...u.querySelectorAll('.c-' + k)].map(e => Math.ceil(e.getBoundingClientRect().width))));
+    if (w) uls.forEach(u => u.style.setProperty('--w-' + k, w + 'px'));
+  }
+}
+$('expbox').addEventListener('toggle', () => alignCols($('agents'), $('expired')));
+
+// 마지막 성공 시각은 클라이언트 시계로 — 끊기면 서버 시각(#clock)도 멈추므로
+let lastOk = 0;
+function online() {  // poll·저장 어느 쪽이든 서버 응답을 받아 그렸으면 연결 상태를 되돌린다
+  lastOk = Date.now(); document.body.classList.remove('offline');
+  $('conn').className = ''; $('conn').textContent = '연결됨';
+}
+async function poll() {
+  try {
+    render(await (await fetch('/api/state')).json()); online();
+  } catch {
+    document.body.classList.add('offline');
+    $('conn').className = 'bad'; $('conn').textContent = '연결 끊김';
+    $('offline').textContent = lastOk ? `연결 끊김 · 마지막 갱신 ${dur(Math.round((Date.now() - lastOk) / 1000))} 전 — 아래는 그때 값` : '연결 끊김 · 서버(subd)가 떠 있는지 확인';
+  }
+}
+
+$('add').onsubmit = e => { e.preventDefault(); const v = e.target.text.value.trim(); if (v) { send({ action: 'add', text: v }); e.target.reset(); } };
+poll();
+setInterval(poll, 3000);
+</script>
+</body>
+</html>

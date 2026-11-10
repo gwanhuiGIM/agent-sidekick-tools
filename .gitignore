@@ -1,0 +1,5 @@
+__pycache__/
+*.tmp
+*.bak.*
+# 데모 실행 중 바뀌는 사본 — 원본은 checklist.sample.md
+subdisplay/example/checklist.md
