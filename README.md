@@ -1,4 +1,4 @@
-# agent-dev-tools
+# agent-sidekick-tools
 
 > Small tools for running several coding agents (Claude Code, Codex, Antigravity) in parallel on one Linux PC: a tablet side display for agent status / checklist / PC load / job-posting progress, and a GNOME panel indicator for usage limits. Python standard library + GTK, no database.
 
@@ -13,6 +13,7 @@ herdr 같은 터미널 multiplexer로 agent 세션을 여러 개 띄워 두면, 
 |---|---|---|
 | [`subdisplay/`](subdisplay/README.md) | 태블릿을 서브 디스플레이로 — agent 상태·체크리스트·PC 사용량·지원 공고 정리 상태를 한 화면에 | DB 없음(md 파일이 원본, Obsidian에서 같이 편집), 줄 내용 비교(`expect`)로 동시 수정 충돌 감지, 표준 라이브러리만, tailnet 안에서만 접속 |
 | [`usage-indicator/`](usage-indicator/README.md) | Claude Code·Codex·agy 사용량(5시간·주간 %)과 리셋까지 남은 시간을 GNOME 상단 패널에 | 세 CLI를 병렬 조회, 실패한 서비스 자리만 `err`, 결과를 파일로 남겨 다른 도구가 추가 조회 없이 읽음 |
+| [`tok_refresh/`](tok_refresh/README.md) (문서만) | Oracle Cloud VM의 cron이 하루 4번(06·11·16·21시) Claude Code·Codex·agy에 짧은 ping을 보내 5시간 사용량 윈도우를 정해진 시각에 열고, 리셋 시각을 판정해 Discord로 알림 | 리셋을 업무 시간에 맞춰 하루 사용량을 4개 윈도우로 분배, 공식 CLI만 호출(토큰은 각 CLI가 갱신), `flock`·`timeout`·1회 재시도 |
 
 ## 구조
 ```mermaid
