@@ -51,7 +51,7 @@ deadline: 2026-11-20      # 없으면 마감 '미정'
 | 요청 | 하는 일 |
 |---|---|
 | `GET /api/state` | 체크리스트·agent·계정·사용량·PC 사용량·공고를 JSON 하나로 |
-| `POST /api/checklist` | `{action: add\|toggle\|edit\|delete\|move, line, expect, text, to, to_expect}`. `Content-Type: application/json`만 받고(같은 PC 브라우저의 다른 페이지가 보내는 simple request 차단) 본문은 64KB까지. 줄이 바뀌었으면 409 |
+| `POST /api/checklist` | `{action: add\|toggle\|edit\|delete\|move, line, expect, text, to, to_expect}`. `Content-Type: application/json`만 받고(같은 PC 브라우저의 다른 페이지가 보내는 simple request 차단) 본문은 64KB까지(음수·초과 길이는 413). 줄이 바뀌었으면 409 |
 | `GET /`, manifest, 아이콘 | 이 4개 경로만 서빙 |
 
 ## 시험
@@ -65,5 +65,6 @@ python3 -B test_subdisplay.py   # OK OK2 OK3 OK4
 
 ## 한계
 - herdr JSON, Claude Code transcript 형식에 기댑니다. 공식 API가 아니라 업데이트로 깨질 수 있습니다.
-- PC 사용량의 프로세스 CPU는 3초 샘플 두 시점에 살아 있던 프로세스만 셉니다.
+- 외부 편집기와 동시에 저장하는 경우: 서버가 파일을 읽은 뒤 바꿔치기하기 전의 짧은 틈에 다른 편집기(Obsidian 등)가 저장하면, 서버가 쓴 내용이 그 수정을 덮어씁니다. 락은 서버 프로세스 안에서만 걸립니다.
+- PC 사용량의 프로세스 CPU는 3초 샘플 두 시점에 모두 살아 있던(또는 사이에 뜬) 프로세스만 셉니다. 3초 안에 떴다 사라진 짧은 프로세스는 빠집니다.
 - 요청마다 herdr를 실행하고 파일을 전부 읽습니다. 태블릿 1대 기준으로 `/api/state` 1회 약 10ms였고, 클라이언트가 많아지면 짧은 캐시가 필요합니다.

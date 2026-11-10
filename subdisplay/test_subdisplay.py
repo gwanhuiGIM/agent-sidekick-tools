@@ -188,6 +188,10 @@ with tempfile.TemporaryDirectory() as tmp:
     add = json.dumps({'action': 'add', 'text': 'B'}).encode()
     assert post(add, 'text/plain') == 415 and ck.read_text(encoding='utf-8') == '- [ ] A\n'  # simple request 차단
     assert post(b'{"action": "add", "text": "' + b'x' * 70_000 + b'"}', 'application/json') == 413
+    raw = __import__('http.client').client.HTTPConnection('127.0.0.1', srv.server_address[1], timeout=5)
+    raw.putrequest('POST', '/api/checklist'); raw.putheader('Content-Type', 'application/json'); raw.putheader('Content-Length', '-1'); raw.endheaders()
+    assert raw.getresponse().status == 413  # 음수 길이는 읽지 않고 거절
+    raw.close()
     assert post(add, 'application/json; charset=utf-8') == 200 and ck.read_text(encoding='utf-8') == '- [ ] A\n- [ ] B\n'
     assert len(json.loads(urllib.request.urlopen(url.replace('checklist', 'state')).read())['postings']) == 3  # example 공고
     srv.shutdown()

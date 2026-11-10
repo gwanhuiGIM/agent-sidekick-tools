@@ -28,7 +28,7 @@ python3 codex-usage.py                         # Codex 5h/7d 잔여·plan·credi
 | agy | `agy -p /quota --output-format json`의 `command.data.groups`, 계정은 로그의 OAuth 줄 | |
 | 스파크라인·시간대 행 | `ccusage blocks --json` + `~/.claude/projects/**/*.jsonl` 증분 파싱 | 비용은 근사치 |
 
-- 시각은 시스템 로컬 시간대로 바꿔 비교합니다.
+- 시각은 시스템 로컬 시간대로 바꾼 naive 시각으로 비교합니다. 서머타임이 끝나는 1시간 동안은 같은 시각이 두 번 나와 남은 시간이 최대 1시간 틀릴 수 있습니다.
 - `ccusage`는 PATH에서 먼저 찾고, 없으면 nvm 설치 위치(`~/.nvm/versions/node/*/bin`)·`/usr/local/bin`을 봅니다. 없으면 스파크라인 자리가 `menu err`로 바뀌고 시간대 행이 빠지지만, 공식 사용량 메뉴는 그대로 나옵니다.
 
 ## 다른 도구에 주는 것

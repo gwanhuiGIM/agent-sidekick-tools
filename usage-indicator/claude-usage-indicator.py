@@ -150,7 +150,7 @@ def fetch_official():
 
 
 def _log(what, e):
-    """stderr로 traceback (tok 터미널)."""
+    """stderr로 traceback (띄운 터미널)."""
     print(f"[{datetime.now():%m-%d %H:%M:%S}] {what}", file=sys.stderr)  # noqa: DTZ005
     traceback.print_exception(type(e), e, e.__traceback__, file=sys.stderr)
 
@@ -160,7 +160,7 @@ _AGY_SHORT = {"Gemini Models": "Gemini", "Claude and GPT models": "Claude·GPT"}
 
 
 def quota_snapshot(off, now=None):
-    """hook용 상태: {agent: {창: {used, resets_at}}}. 조회 실패한 서비스는 빼서 hook이 침묵하게 한다."""
+    """다른 도구가 읽을 상태: {agent: {창: {used, resets_at}}}. 조회 실패한 서비스는 빼서 읽는 쪽이 낡은 값을 쓰지 않게 한다."""
     now = now or datetime.now()  # noqa: DTZ005 -- naive 로컬 시각(_to_local과 같은 기준)
     snap = {"fetched_at": now.isoformat(timespec="seconds")}
     c, x, a = off["claude"], off["codex"], off["agy"]
@@ -182,7 +182,7 @@ def write_quota_file(off):
     os.makedirs(os.path.dirname(QUOTA_FILE), exist_ok=True)
     with open(tmp, "w") as f:
         json.dump(quota_snapshot(off), f, ensure_ascii=False)
-    os.replace(tmp, QUOTA_FILE)  # hook이 반쯤 쓴 파일을 읽지 않게 원자적 교체
+    os.replace(tmp, QUOTA_FILE)  # 읽는 쪽이 반쯤 쓴 파일을 읽지 않게 원자적 교체
 
 
 def label_text(off):
@@ -289,7 +289,7 @@ _tail_cache = {}  # path -> [offset, [(local_datetime, tokens, project), ...], �
 def _scan_transcripts():
     """~/.claude/projects/**/*.jsonl에서 (시각, 토큰, 프로젝트) 목록. 증분 파싱(파일당 새 줄만).
     재귀: subagent 기록(<세션>/subagents/*.jsonl) 포함. 한 응답이 content 블록마다 같은 usage로 여러 줄
-    기록되므로 연속된 같은 (message.id, requestId)는 1번만 센다 — 2026-10-03 실측으로 ccusage blocks와 ±0.0% 일치
+    기록되므로 연속된 같은 (message.id, requestId)는 1번만 센다 — 실측으로 ccusage blocks와 ±0.0% 일치
     (중복 제거 전엔 +57~92% 과대)."""
     events = []
     for path in glob.glob(f"{PROJECTS_DIR}/**/*.jsonl", recursive=True):
@@ -438,7 +438,7 @@ def main():
         official = None
         try:
             official = fetch_official()
-            write_quota_file(official)  # 다른 에이전트의 hook이 한도 소진을 알게
+            write_quota_file(official)  # 다른 도구가 추가 조회 없이 한도를 알게
             ind.set_label(label_text(official), "100%/100% 0:00 | 100%/100% 0:00 | 100%/100%")
         except Exception as e:  # noqa: BLE001
             _log("label failed", e)
@@ -596,7 +596,7 @@ def _selftest():
     assert snap["claude"]["7d"] == {"used": 84, "resets_at": "2099-01-01T00:00:00"}, snap
     assert snap["codex"]["5h"]["used"] == 42 and snap["agy"]["Gemini"]["used"] == 67, snap
     assert snap["agy"]["Claude·GPT"]["used"] == 0 and snap["fetched_at"] == "2026-10-03T12:00:00", snap
-    assert "codex" not in quota_snapshot({**off, "codex": RuntimeError()}), "실패 서비스는 빠져야 hook이 침묵"
+    assert "codex" not in quota_snapshot({**off, "codex": RuntimeError()}), "실패 서비스는 빠져야 읽는 쪽이 낡은 값을 안 씀"
     lt = label_text(off)
     assert re.fullmatch(r"6%/84% \d+:\d\d \| 42%/7% \d+:\d\d \| 67%/0%", lt), lt  # 셋 다 사용량 %, 시간 H:MM
     assert _hm(datetime(2026, 10, 3, 15, 59), datetime(2026, 10, 3, 12, 18)) == "3:41"  # noqa: DTZ001

@@ -374,7 +374,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(415, {'error': 'Content-Type must be application/json'})
         try:
             size = int(self.headers.get('Content-Length', 0))
-            if size > MAX_BODY:
+            if not 0 <= size <= MAX_BODY:  # 음수면 rfile.read(-1)이 연결이 끊길 때까지 기다린다
                 return self.send(413, {'error': 'body too large'})
             op = json.loads(self.rfile.read(size))
             with LOCK:
