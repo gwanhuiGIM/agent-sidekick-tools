@@ -2,6 +2,8 @@
 
 Claude Code·Codex·agy(Antigravity CLI) 사용량을 GNOME 상단 패널(AppIndicator)에 띄우는 트레이 앱(`claude-usage-indicator.py`)과, Codex 사용량을 터미널에 한 번 찍는 스크립트(`codex-usage.py`)입니다.
 
+![패널 메뉴(계정·프로젝트명은 demo·예시 이름으로 가림)](../docs/screenshots/usage-indicator.png)
+
 ## 실행
 ```bash
 python3 claude-usage-indicator.py              # 패널에 띄움. 종료는 메뉴 맨 아래 Quit
