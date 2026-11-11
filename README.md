@@ -3,6 +3,7 @@
 > Small tools for running several coding agents (Claude Code, Codex, Antigravity) in parallel on one Linux PC: a tablet side display for agent status / checklist / PC load / job-posting progress, and a GNOME panel indicator for usage limits. Python standard library + GTK, no database.
 
 코딩 agent 여러 개를 동시에 돌리며 일할 때 쓰려고 만든 개인 도구 두 개입니다. 터미널을 오가지 않고 곁눈으로 상태를 보는 것이 목적입니다.
+각 코드는 바이브코딩(Claude Code, Codex)를 활용해 개발하였습니다.
 
 ![subdisplay 화면(데모 데이터)](docs/screenshots/subdisplay.png)
 
