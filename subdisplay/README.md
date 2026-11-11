@@ -6,6 +6,7 @@
 |---|---|
 | herdr | agent 세션마다 `작업 폴더 · 탭 · 세션 이름`과 상태(완료 → 작업 중 순). Claude 세션은 prompt cache 만료가 다가오면 주황 `캐시 N분`, 만료되면 빨강. 제목 오른쪽은 로그인한 Claude 계정과 5시간·주간 사용량 |
 | 체크리스트 | md 파일의 `- [ ]` 줄. 탭해서 체크, 추가·수정·삭제, `≡`를 끌어 순서 바꾸기 |
+| 배터리(맨 윗줄) | 시각 왼쪽에 노트북 배터리 `잔량% · 충전/방전 전력(W) · 완충까지/남은 시간 · 수명%`(수명 = 현재 최대 용량 ÷ 설계 용량). `/sys/class/power_supply/BAT*/uevent`(energy·charge 계열 모두)를 요청마다 읽는다. 방전 중 20% 이하면 빨강, 배터리 없는 PC면 숨김. 남은 시간은 순간 전력 기준이라 부하에 따라 흔들린다 |
 | PC 사용량 | CPU·메모리 최근 5분 그래프, 이름별 메모리 상위 프로세스 |
 | 공고 | 지원할 공고 폴더마다 JD·회사정보·자기소개서 준비 상태(O·△·X)와 마감 D-day |
 
@@ -50,13 +51,13 @@ deadline: 2026-11-20      # 없으면 마감 '미정'
 ## API
 | 요청 | 하는 일 |
 |---|---|
-| `GET /api/state` | 체크리스트·agent·계정·사용량·PC 사용량·공고를 JSON 하나로 |
+| `GET /api/state` | 체크리스트·agent·계정·사용량·PC 사용량·배터리·공고를 JSON 하나로 |
 | `POST /api/checklist` | `{action: add\|toggle\|edit\|delete\|move, line, expect, text, to, to_expect}`. `Content-Type: application/json`만 받고(같은 PC 브라우저의 다른 페이지가 보내는 simple request 차단) 본문은 64KB까지(음수·초과 길이는 413). 줄이 바뀌었으면 409 |
 | `GET /`, manifest, 아이콘 | 이 4개 경로만 서빙 |
 
 ## 시험
 ```bash
-python3 -B test_subdisplay.py   # OK OK2 OK3 OK4
+python3 -B test_subdisplay.py   # OK OK2 OK3 OK4 OK5
 ```
 - `OK`: 체크리스트 파싱·다섯 동작·충돌(409)·줄바꿈 주입 차단
 - `OK2`: CPU·메모리 계산(`/proc` 텍스트를 직접 넣음), 프로세스 묶기, 공고 판정

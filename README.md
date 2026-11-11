@@ -56,7 +56,7 @@ python3 usage-indicator/claude-usage-indicator.py
 
 ## 시험
 ```bash
-python3 -B subdisplay/test_subdisplay.py                       # OK OK2 OK3 OK4
+python3 -B subdisplay/test_subdisplay.py                       # OK OK2 OK3 OK4 OK5
 python3 -B usage-indicator/claude-usage-indicator.py --selftest  # selftest PASS (GTK 없어도 돈다)
 # codex-usage.py는 실행할 때마다 포맷 self-check를 먼저 돌린 뒤 실제 조회를 한다
 ```

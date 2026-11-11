@@ -196,3 +196,17 @@ with tempfile.TemporaryDirectory() as tmp:
     assert len(json.loads(urllib.request.urlopen(url.replace('checklist', 'state')).read())['postings']) == 3  # example 공고
     srv.shutdown()
 print('OK4')
+
+# battery_info(): charge 계열(µAh·µA×V)·energy 계열(µWh·µW), 충전/방전 남은 시간, 값 없음
+from subdisplay import battery_info
+U = 'POWER_SUPPLY_'
+chg = '\n'.join(U + l for l in ['STATUS=Charging', 'CAPACITY=19', 'CHARGE_NOW=1569000', 'CHARGE_FULL=7868000',
+                                 'CHARGE_FULL_DESIGN=9450000', 'CURRENT_NOW=4522000', 'VOLTAGE_NOW=8090000'])
+b = battery_info(chg)
+assert b == {'percent': 19, 'status': 'Charging', 'watts': 36.6, 'left': round(6299000 / 4522000 * 3600), 'health': 83}, b
+dis = '\n'.join(U + l for l in ['STATUS=Discharging', 'CAPACITY=50', 'ENERGY_NOW=30000000', 'ENERGY_FULL=60000000',
+                                 'ENERGY_FULL_DESIGN=72000000', 'POWER_NOW=-15000000'])
+assert battery_info(dis) == {'percent': 50, 'status': 'Discharging', 'watts': 15.0, 'left': 7200, 'health': 83}
+assert battery_info(U + 'STATUS=Full\n' + U + 'CAPACITY=100') == {'percent': 100, 'status': 'Full', 'watts': None, 'left': None, 'health': None}
+assert battery_info(U + 'STATUS=Discharging\n' + U + 'CAPACITY=40\n' + U + 'CHARGE_NOW=1000\n' + U + 'CURRENT_NOW=0')['left'] is None  # 전류 0
+print('OK5')

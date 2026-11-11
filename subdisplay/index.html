@@ -13,9 +13,11 @@
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.4 system-ui, sans-serif; }
   ::placeholder { color:var(--dim); }
-  header { display:flex; gap:16px; align-items:baseline; padding:12px 20px; border-bottom:1px solid var(--line); }
+  header { display:flex; flex-wrap:wrap; gap:4px 16px; align-items:baseline; padding:12px 20px; border-bottom:1px solid var(--line); }
   header h1 { font-size:18px; margin:0; }
-  #clock { font-variant-numeric:tabular-nums; color:var(--dim); margin-left:auto; }
+  #batt { font-variant-numeric:tabular-nums; color:var(--dim); margin-left:auto; white-space:nowrap; }
+  #batt.low { color:var(--other); font-weight:600; }  /* 방전 중 20% 이하 */
+  #clock { font-variant-numeric:tabular-nums; color:var(--dim); }
   #conn { color:var(--dim); }
   #conn::before { content:''; display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--dim); margin-right:6px; vertical-align:1px; }
   #conn.bad { color:var(--other); font-weight:600; }
@@ -134,7 +136,7 @@
 </style>
 </head>
 <body>
-<header><h1>Sub Display</h1><span id="conn" title="서버 연결">-</span><span class="meta" id="file"></span><span id="clock"></span></header>
+<header><h1>Sub Display</h1><span id="conn" title="서버 연결">-</span><span class="meta" id="file"></span><span id="batt"></span><span id="clock"></span></header>
 <div id="offline" role="status"></div>
 <main>
   <section>
@@ -305,9 +307,23 @@ function cacheLine(c) {
   return el('div', 'cache ' + c.level, text);
 }
 
+// 맨 윗줄 시각 옆: 잔량 · 충전/방전 전력 · 완충/방전까지 남은 시간 · 수명(설계 용량 대비 현재 최대 용량)
+function renderBattery(b) {
+  const box = $('batt');
+  if (!b || b.percent == null) { box.textContent = ''; box.className = ''; return; }
+  const st = { Charging: '충전', Discharging: '방전', Full: '완충', 'Not charging': '충전 안 함' }[b.status] || b.status;
+  const parts = [`${b.status === 'Charging' ? '⚡' : '🔋'}${b.percent}%`, st + (b.watts ? ` ${b.watts}W` : '')];
+  if (b.left > 0) parts.push((b.status === 'Charging' ? '완충까지 ' : '') + dur(b.left) + (b.status === 'Discharging' ? ' 남음' : ''));
+  if (b.health != null) parts.push(`수명 ${b.health}%`);
+  box.textContent = parts.join(' · ');
+  box.className = b.status === 'Discharging' && b.percent <= 20 ? 'low' : '';
+  box.title = '배터리: 잔량 · 상태 전력 · 남은 시간 · 수명(설계 용량 대비 현재 최대 용량)';
+}
+
 function render(s) {
   $('file').textContent = s.file.split('/').pop();
   $('clock').textContent = s.now;
+  renderBattery(s.battery);
   const items = [...s.checklist].sort((a, b) => a.done - b.done);
   $('left').textContent = items.filter(i => !i.done).length;
   if (!drag) $('list').replaceChildren(...items.map(i => {  // 끄는 중엔 3초 poll이 목록을 갈아엎지 않게

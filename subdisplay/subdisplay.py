@@ -262,6 +262,37 @@ def sys_state():
             'ncpu': os.cpu_count(), 'mem_total': round(os.sysconf('SC_PHYS_PAGES') * PAGE_BYTES / 2**20), 'load': [round(x, 2) for x in os.getloadavg()]}
 
 
+def battery_info(text):
+    """/sys/class/power_supply/BAT*/uevent → 잔량·상태·전력(W)·남은 시간(초)·수명(%). 장치마다 energy(µWh·µW) 또는 charge(µAh·µA) 계열만 준다."""
+    kv = dict(l.split('=', 1) for l in text.splitlines() if '=' in l)
+    num = lambda k: int(kv['POWER_SUPPLY_' + k]) if kv.get('POWER_SUPPLY_' + k, '').strip().lstrip('-').isdigit() else None
+    unit = 'ENERGY' if num('ENERGY_NOW') is not None else 'CHARGE'
+    now, full, design = num(unit + '_NOW'), num(unit + '_FULL'), num(unit + '_FULL_DESIGN')
+    rate = num('POWER_NOW') if unit == 'ENERGY' else num('CURRENT_NOW')  # µW 또는 µA
+    rate = abs(rate) if rate else None  # 일부 장치는 방전 중 음수
+    volt = num('VOLTAGE_NOW')
+    status = kv.get('POWER_SUPPLY_STATUS', 'Unknown')
+    left = None
+    if rate and now is not None:
+        if status == 'Discharging':
+            left = round(now / rate * 3600)
+        elif status == 'Charging' and full:
+            left = round(max(full - now, 0) / rate * 3600)
+    watts = rate / 1e6 if unit == 'ENERGY' else (rate * volt / 1e12 if rate and volt else None)
+    return {'percent': num('CAPACITY'), 'status': status, 'watts': round(watts, 1) if watts else None,
+            'left': left, 'health': round(100 * full / design) if full and design else None}
+
+
+def battery():
+    """첫 배터리(BAT*) 상태. 배터리가 없는 PC·읽기 실패면 None — 화면에서 칸을 숨긴다."""
+    for d in sorted(Path('/sys/class/power_supply').glob('BAT*')):
+        try:
+            return battery_info((d / 'uevent').read_text())
+        except (OSError, ValueError):
+            return None
+    return None
+
+
 def frontmatter(lines):
     if not lines or lines[0].strip() != '---':
         return {}
@@ -343,7 +374,7 @@ def state():
     items, err = agents()
     posts, perr = postings()
     return {'checklist': parse(read_lines()), 'agents': items, 'agents_error': err, 'account': account(), 'quota': claude_quota(),
-            'sys': sys_state(), 'postings': posts, 'postings_error': perr,
+            'sys': sys_state(), 'battery': battery(), 'postings': posts, 'postings_error': perr,
             'file': str(CHECKLIST), 'now': time.strftime('%H:%M:%S')}
 
 
