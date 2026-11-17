@@ -95,7 +95,7 @@ L = ['{"잘린 첫 줄', ans('2026-10-27T12:00:00Z', 1000, 50), ans('2026-10-27T
      ans('2026-10-27T13:30:00Z', 5, side=True),  # subagent 답변은 무시
      json.dumps({'type': 'user', 'timestamp': '2026-10-27T13:40:00Z'})]
 i = cache_info(L)
-assert i == {'at': T0, 'ctx': 200_012, 'ttl': 3600, 'compacted': False}, i
+assert i == {'at': T0, 'ctx': 200_012, 'ttl': 3600, 'compacted': False, 'req': None}, i  # user 줄(13:40)은 요청으로 안 본다
 assert cache_info(L + [ans('2026-10-27T13:01:00Z', 200_000)])['ttl'] == 3600  # cache 쓰기 없는 답변은 앞 TTL 유지
 FIVE = ans('2026-10-27T13:00:00Z', 1, 9, ttl='5m')
 assert cache_info([FIVE])['ttl'] == 300
@@ -108,15 +108,30 @@ BAD = [json.dumps({'type': 'assistant', 'timestamp': '2026-10-27T14:00:00Z', 'me
        json.dumps({'type': 'assistant', 'message': {'usage': {'input_tokens': 1}}})]
 assert cache_info(L + BAD) == i
 assert cache_info([json.dumps({'type': 'assistant', 'timestamp': '2026-10-27T13:00:00Z', 'message': {'usage': {'input_tokens': None, 'cache_read_input_tokens': 4}}})])['ctx'] == 4
-assert cache_state(i, T0 + 49 * 60)['level'] == 'ok'
-assert cache_state(i, T0 + 51 * 60) == {'age': 3060, 'left': 540, 'ctx': 200_012, 'compacted': False, 'level': 'warn'}
+assert cache_state(i, T0 + 39 * 60)['level'] == 'ok'
+assert cache_state(i, T0 + 41 * 60) == {'age': 2460, 'left': 1140, 'ctx': 200_012, 'compacted': False, 'level': 'warn', 'gap': None, 'miss': False, 'big': True, 'ttl': 3600}
 assert cache_state(i, T0 + 61 * 60)['level'] == 'expired'
-assert [cache_state(i, T0 + s)['level'] for s in (2999, 3000, 3599, 3600)] == ['ok', 'warn', 'warn', 'expired']  # 경계
-assert cache_state(dict(i, ttl=None), T0 + 50 * 60)['level'] == 'warn' and cache_state(dict(i, ttl=300), T0 + 224)['level'] == 'ok' and cache_state(dict(i, ttl=300), T0 + 225)['level'] == 'warn'
-assert cache_state(dict(i, ctx=99_999), T0 + 50 * 60)['level'] == 'ok'  # 작은 세션은 경고 안 함
+assert [cache_state(i, T0 + s)['level'] for s in (2399, 2400, 3599, 3600)] == ['ok', 'warn', 'warn', 'expired']  # 경계
+assert cache_state(dict(i, ttl=None), T0 + 40 * 60)['level'] == 'warn' and cache_state(dict(i, ttl=300), T0 + 224)['level'] == 'ok' and cache_state(dict(i, ttl=300), T0 + 225)['level'] == 'warn'
+assert cache_state(dict(i, ctx=99_999), T0 + 40 * 60)['level'] == 'ok'  # 작은 세션은 경고 안 함
 c = cache_info(L + [json.dumps({'type': 'system', 'subtype': 'compact_boundary', 'timestamp': '2026-10-27T13:41:00Z'})])
 assert c['compacted'] and cache_state(c, T0 + 50 * 60)['level'] == 'ok'  # compact 뒤엔 경고 안 함
 assert cache_state(None, T0) is None
+
+# 답변 뒤 요청(api-request 줄): 첫 응답 전에도 이번 요청의 cache 적중·miss를 판정하고, 상태는 요청 시각부터 잰다
+req = lambda ts, side=None: json.dumps({'type': 'api-request', 'timestamp': ts, 'querySource': 'repl_main_thread', **({'isSidechain': side} if side else {})})
+r = cache_info(L + [req('2026-10-27T13:50:00Z'), req('2026-10-27T13:55:00Z')])
+assert r['req'] == T0 + 50 * 60  # 답변 뒤 첫 요청
+assert cache_info(L + [req('2026-10-27T13:50:00Z', side=True)])['req'] is None  # subagent 요청은 무시
+assert cache_info([req('2026-10-27T12:59:00Z'), L[2]])['req'] is None  # 답변 전 요청은 그 답변이 끝냈다
+assert cache_info(L + [req('2026-10-27T13:50:00Z'), ans('2026-10-27T13:51:00Z', 200_000)])['req'] is None  # 응답이 오면 해소
+st = cache_state(r, T0 + 52 * 60)
+assert (st['gap'], st['miss'], st['level'], st['left'], st['age']) == (3000, False, 'ok', 3480, 3120), st  # 적중 — 요청이 cache를 갱신
+assert [cache_state(dict(i, req=T0 + s), T0 + 3700)['miss'] for s in (3599, 3600)] == [False, True]  # 경계
+assert cache_state(dict(i, req=T0 + 2 * 3600), T0 + 2 * 3600 + 10)['level'] == 'ok'  # miss여도 다시 쓴 cache는 새것
+assert cache_state(dict(i, req=T0 + 3600, compacted=True), T0 + 3700)['miss'] is False  # compact 뒤엔 판정 안 함
+assert [cache_state(dict(i, ctx=n), T0)['big'] for n in (149_999, 150_000)] == [False, True]
+assert cache_state(dict(i, compacted=True), T0)['big'] is False
 
 # transcript(): 끝만 읽다가 큰 줄에 가려지면 범위를 넓혀 파일 전체까지 본다
 import tempfile
@@ -210,3 +225,82 @@ assert battery_info(dis) == {'percent': 50, 'status': 'Discharging', 'watts': 15
 assert battery_info(U + 'STATUS=Full\n' + U + 'CAPACITY=100') == {'percent': 100, 'status': 'Full', 'watts': None, 'left': None, 'health': None}
 assert battery_info(U + 'STATUS=Discharging\n' + U + 'CAPACITY=40\n' + U + 'CHARGE_NOW=1000\n' + U + 'CURRENT_NOW=0')['left'] is None  # 전류 0
 print('OK5')
+
+# 자동 compact 대상 판정·입력줄 검사
+from subdisplay import compact_due, input_empty
+W = {'level': 'warn', 'compacted': False, 'ctx': 150_000, 'gap': None, 'left': 420, 'ttl': 3600}
+assert compact_due('idle', W, None) and compact_due('done', W, {'5h': 89})
+assert not compact_due('working', W, None) and not compact_due('blocked', W, None)
+assert not compact_due('idle', dict(W, ctx=149_999), None)  # 기준 150k
+assert not compact_due('idle', dict(W, ttl=300, left=60), None)  # 1h TTL만
+assert not compact_due('idle', dict(W, left=421), None) and compact_due('idle', dict(W, left=1), None)  # 만료 7분 전부터
+assert not compact_due('idle', dict(W, level='ok'), None) and not compact_due('idle', dict(W, level='expired'), None)  # 만료 뒤엔 안 함
+assert not compact_due('idle', dict(W, compacted=True), None) and not compact_due('idle', dict(W, gap=30), None)
+assert not compact_due('idle', W, {'5h': 90}) and not compact_due('idle', None, None)
+assert input_empty('출력\n──\n❯ \n──\n  🤖 Opus') and input_empty('❯')
+assert not input_empty('──\n❯ 쓰다 만 글\n──') and not input_empty('입력줄 없음')
+print('OK6')
+
+# 자동 compact 예외
+import subdisplay, tempfile
+subdisplay.NOCOMPACT_FILE = Path(tempfile.mkdtemp()) / 'nc.json'
+SID = '0123abcd-0000-0000-0000-000000000000'
+subdisplay.set_nocompact(SID, True)
+assert SID in subdisplay.load_nocompact()
+subdisplay.set_nocompact(SID, False)
+assert subdisplay.load_nocompact() == set()
+try:
+    subdisplay.set_nocompact('../x', True)
+    raise AssertionError('sid 검사 없음')
+except ValueError:
+    pass
+print('OK7')
+
+# autocompactor — herdr 호출·transcript는 가짜. 예외·작업 중 건너뜀, 주기마다 하나, 같은 답변 시점엔 한 번(새 답변이면 다시),
+# 입력줄 조회 사이 만료 직전(AUTO_MIN_LEFT 미만)이 되거나 예외 버튼을 누르면 안 보낸다
+import time
+import types
+NOW = time.time()
+INFO = {k: {'at': NOW - 3600 + 400, 'ctx': 200_000, 'ttl': 3600, 'compacted': False, 'req': None} for k in 'abc'}
+def fake_agents():
+    return ([dict(pane='p' + k, sid=k, name=k, status='working' if k == 'a' else 'idle', cache=cache_state(INFO[k], time.time())) for k in 'abc'], None)
+calls, hook = [], {}
+def fake_run(cmd, **k):
+    calls.append(cmd)
+    if cmd[1] == 'pane' and cmd[3] in hook:
+        hook.pop(cmd[3])()
+    return types.SimpleNamespace(returncode=0, stdout='❯ \n────' if cmd[1] == 'pane' else '', stderr='')
+def run_ticks(n):
+    calls.clear()
+    left = [n]
+    def tick(_):
+        left[0] -= 1
+        if left[0] < 0:
+            raise StopIteration
+    real = subdisplay.subprocess.run, subdisplay.time.sleep, subdisplay.agents, subdisplay.transcript, subdisplay.claude_quota
+    subdisplay.subprocess.run, subdisplay.time.sleep, subdisplay.agents = fake_run, tick, fake_agents
+    subdisplay.transcript, subdisplay.claude_quota = (lambda sid: dict(INFO[sid])), (lambda: None)
+    try:
+        subdisplay.autocompactor()
+    except StopIteration:
+        pass
+    subdisplay.subprocess.run, subdisplay.time.sleep, subdisplay.agents, subdisplay.transcript, subdisplay.claude_quota = real
+    return [c[3] for c in calls if c[1] == 'agent']
+subdisplay.NOCOMPACT.clear(); subdisplay.NOCOMPACT.add('b'); subdisplay.AUTO_SENT.clear()
+assert run_ticks(3) == ['pc'], calls  # a 작업 중, b 예외, c 한 번만
+INFO['c']['at'] += 1  # 새 답변 → 다시 대상
+assert run_ticks(2) == ['pc']
+subdisplay.NOCOMPACT.clear(); subdisplay.AUTO_SENT.clear()
+hook['pb'] = lambda: INFO['b'].update(at=time.time() - 3600 + 20)  # 입력줄 조회 사이 만료 20초 전 → 안 보냄
+hook['pc'] = lambda: subdisplay.NOCOMPACT.add('c')  # 입력줄 조회 사이 예외 버튼 → 안 보냄
+assert run_ticks(1) == [], calls
+assert input_empty('❯ \n  \n────') and not input_empty('❯ \n  둘째 줄 글\n────')  # 여러 줄 입력
+try:
+    subdisplay.set_nocompact(SID, 'false'); raise AssertionError('off 문자열 허용')
+except ValueError:
+    pass
+try:
+    subdisplay.set_nocompact('a' * 8 + '-' * 28, True); raise AssertionError('UUID 구조 아님 허용')
+except ValueError:
+    pass
+print('OK8')

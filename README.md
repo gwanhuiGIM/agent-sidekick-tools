@@ -2,7 +2,7 @@
 
 > Small tools for running several coding agents (Claude Code, Codex, Antigravity) in parallel on one Linux PC: a tablet side display for agent status / checklist / PC load / job-posting progress, and a GNOME panel indicator for usage limits. Python standard library + GTK, no database.
 
-코딩 agent 여러 개를 동시에 돌리며 일할 때 쓰려고 만든 개인 도구 두 개입니다. 터미널을 오가지 않고 곁눈으로 상태를 보는 것이 목적입니다.
+코딩 agent 여러 개를 동시에 돌리며 일할 때 쓰려고 만든 개인 도구 두 개입니다. 터미널을 오가지 않고 곁눈으로 상태를 보는 것이 목적이고, 자리를 비운 사이 큰 세션의 prompt cache가 만료되기 직전에 `/compact`를 대신 넣어 주는 자동화도 들어 있습니다(선택).
 각 코드는 바이브코딩(Claude Code, Codex)를 활용해 개발하였습니다.
 
 ![subdisplay 화면(데모 데이터)](docs/screenshots/subdisplay.png)
@@ -12,7 +12,7 @@ herdr 같은 터미널 multiplexer로 agent 세션을 여러 개 띄워 두면, 
 
 | 도구 | 하는 일 | 핵심 설계 |
 |---|---|---|
-| [`subdisplay/`](subdisplay/README.md) | 태블릿을 서브 디스플레이로 — agent 상태·체크리스트·PC 사용량·지원 공고 정리 상태를 한 화면에 | DB 없음(md 파일이 원본, Obsidian에서 같이 편집), 줄 내용 비교(`expect`)로 동시 수정 충돌 감지, 표준 라이브러리만, tailnet 안에서만 접속 |
+| [`subdisplay/`](subdisplay/README.md) | 태블릿을 서브 디스플레이로 — agent 상태·체크리스트·PC 사용량·지원 공고 정리 상태를 한 화면에 | DB 없음(md 파일이 원본, Obsidian에서 같이 편집), 줄 내용 비교(`expect`)로 동시 수정 충돌 감지, 표준 라이브러리만, tailnet 안에서만 접속, cache 만료 7분 전 자동 `/compact`(선택 — [설명](subdisplay/README.md)) |
 | [`usage-indicator/`](usage-indicator/README.md) | Claude Code·Codex·agy 사용량(5시간·주간 %)과 리셋까지 남은 시간을 GNOME 상단 패널에 | 세 CLI를 병렬 조회, 실패한 서비스 자리만 `err`, 결과를 파일로 남겨 다른 도구가 추가 조회 없이 읽음 |
 | [`tok_refresh/`](tok_refresh/README.md) (문서만) | Oracle Cloud VM의 cron이 하루 4번(06·11·16·21시) Claude Code·Codex·agy에 짧은 ping을 보내 5시간 사용량 윈도우를 정해진 시각에 열고, 리셋 시각을 판정해 Discord로 알림 | 리셋을 업무 시간에 맞춰 하루 사용량을 4개 윈도우로 분배, 공식 CLI만 호출(토큰은 각 CLI가 갱신), `flock`·`timeout`·1회 재시도 |
 
@@ -39,6 +39,7 @@ flowchart LR
     SRV -->|"읽기만"| PF
     SRV -->|"subprocess, 3초 타임아웃"| HD
     SRV -->|"cache 만료·계정"| TR
+    SRV -.->|"자동 compact(선택)<br/>herdr pane read · agent prompt /compact"| HD
     SRV --> PROC
     IND -->|"1분마다 조회"| CLI
     IND -->|"원자적 쓰기"| Q
@@ -57,7 +58,7 @@ python3 usage-indicator/claude-usage-indicator.py
 
 ## 시험
 ```bash
-python3 -B subdisplay/test_subdisplay.py                       # OK OK2 OK3 OK4 OK5
+python3 -B subdisplay/test_subdisplay.py                       # OK OK2 OK3 OK4 OK5 OK6 OK7 OK8
 python3 -B usage-indicator/claude-usage-indicator.py --selftest  # selftest PASS (GTK 없어도 돈다)
 # codex-usage.py는 실행할 때마다 포맷 self-check를 먼저 돌린 뒤 실제 조회를 한다
 ```

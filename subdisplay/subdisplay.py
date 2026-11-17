@@ -31,7 +31,17 @@ PAGE_BYTES = os.sysconf('SC_PAGE_SIZE')
 LOCK = threading.Lock()  # ponytail: 프로세스 내 락만 — Obsidian 동시 편집은 expect 대조(409)로 막는다
 PROJECTS = Path('~/.claude/projects').expanduser()  # Claude Code transcript(<cwd 인코딩>/<session>.jsonl)
 CTX_WARN = 100_000  # 이 이상 context인 세션만 만료 경고 — 작으면 다시 읽어도 싸다
-WARN_LEFT = 10 * 60  # 만료까지 이만큼 남으면 경고 (1h TTL → 답변 50분 뒤). TTL이 짧으면 TTL의 1/4
+COMPACT_CTX = 150_000  # 이 이상 context면 시간과 상관없이 'compact 권장' — 이어서 쓸수록 매 요청이 비싸다
+WARN_LEFT = 20 * 60  # 만료까지 이만큼 남으면 경고 (1h TTL → 답변 40분 뒤). TTL이 짧으면 TTL의 1/4
+# 자동 compact — 만료 임박 구간(자리를 비운 지 40분+)의 큰 세션에 herdr로 /compact를 넣는다
+AUTO = os.environ.get('SUBDISPLAY_AUTOCOMPACT') == '1'  # 기본 꺼짐 — 실행 중인 agent 세션에 입력을 넣으므로 1로 켤 때만
+AUTO_CTX = 150_000  # 이 이상 context만 — 작으면 만료 뒤 다시 읽어도 싸고, compact 요약 손실이 더 크다
+AUTO_QUOTA = 90  # Claude 5h 사용량 %가 이 이상이면 안 한다 — compact도 요청 하나(context 전체 cache read + 요약 출력)
+AUTO_LEFT = 7 * 60  # 초 — 만료까지 이만큼 남았을 때 보낸다(1h TTL이면 답변 53분 뒤). 판정 주기 60초 + compact 소요(69k 세션 실측 12초 — 150k 이상은 미실측)를 빼도 만료 전으로 본다
+AUTO_MIN_LEFT = 30  # 초 — 보내기 직전 다시 쟀을 때 이보다 적게 남았으면 안 보낸다(입력줄 조회 사이 만료 방지)
+AUTO_EVERY = 60  # 초 — 판정 주기
+NOCOMPACT_FILE = Path('~/.cache/subdisplay-nocompact.json').expanduser()  # 자동 compact 예외 session id 목록 — 화면 버튼으로 켜고 끈다
+AUTO_SENT = {}  # session id → (보낼 때의 마지막 답변 시각, 보낸 시각 'HH:MM'). 같은 답변 시점엔 실패해도 1회만(반복 전송 방지), 새 답변이 오면 다시 대상. 서버를 재시작하면 비워진다
 TAIL = 512 * 1024  # transcript 끝에서 읽는 바이트 — 마지막 답변만 찾으면 된다
 TRANSCRIPTS = {}  # 경로 → ((크기, mtime), cache_info 결과). 안 바뀐 파일은 다시 읽지 않는다
 CLAUDE_JSON = Path('~/.claude.json').expanduser()  # 지금 로그인된 계정(.oauthAccount) — /login이 바꾼다
@@ -93,8 +103,10 @@ def write_lines(lines):
 
 
 def cache_info(lines):
-    """transcript jsonl 줄 → 마지막 답변(subagent 제외)의 시각(epoch)·context 토큰·cache TTL(초)·그 뒤 compact 여부. 답변이 없으면 None.
-    TTL은 마지막으로 cache를 쓴 답변의 종류(ephemeral_5m/1h)를 따르고, 읽은 범위에 cache 쓰기가 없으면 None."""
+    """transcript jsonl 줄 → 마지막 답변(subagent 제외)의 시각(epoch)·context 토큰·cache TTL(초)·그 뒤 compact 여부·그 뒤 첫 요청 시각. 답변이 없으면 None.
+    TTL은 마지막으로 cache를 쓴 답변의 종류(ephemeral_5m/1h)를 따르고, 읽은 범위에 cache 쓰기가 없으면 None.
+    req: 답변 뒤 응답을 기다리는 요청('api-request' 줄 — Claude Code가 요청 시작 때 쓴다). 입력 직후 첫 응답 전에도 이번 요청의 cache 적중을 판정하려고.
+    user 줄은 쓰지 않는다 — /model 같은 로컬 명령도 user 줄을 남겨 요청 없이 시각만 갱신된다."""
     info, ttl = None, None
     for l in lines:
         try:
@@ -106,23 +118,31 @@ def cache_info(lines):
                 t = 300 if cc.get('ephemeral_5m_input_tokens') else 3600 if cc.get('ephemeral_1h_input_tokens') else ttl
                 info = {'at': datetime.fromisoformat(d['timestamp'].replace('Z', '+00:00')).timestamp(),
                         'ctx': sum(u.get(k) or 0 for k in ('input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens')),
-                        'ttl': t, 'compacted': False}
+                        'ttl': t, 'compacted': False, 'req': None}
                 ttl = t
             elif d.get('subtype') == 'compact_boundary' and info:
                 info['compacted'] = True
+            elif d.get('type') == 'api-request' and info and info['req'] is None:
+                info['req'] = datetime.fromisoformat(d['timestamp'].replace('Z', '+00:00')).timestamp()
         except (ValueError, TypeError, AttributeError, KeyError):  # 잘린 첫 줄·형식이 다른 줄은 건너뛴다
             continue
     return info
 
 
 def cache_state(info, now):
-    """마지막 답변 기준 prompt cache 상태. warn = 만료 전 compact하거나 이어갈 때, expired = 다음 입력이 context 전체를 다시 처리."""
+    """마지막 답변 기준 prompt cache 상태. warn = 만료 전 compact하거나 이어갈 때, expired = 다음 입력이 context 전체를 다시 처리.
+    응답 대기 중인 요청이 있으면 cache는 그 요청 때 갱신된 것으로 보고 거기서부터 잰다. gap = 답변~요청 간격(초), miss = 그 간격이 TTL 이상(이번 요청이 context 전체를 다시 처리).
+    big = compact 안 했고 context가 COMPACT_CTX 이상 — 시간과 무관해 작업 중에도 보인다."""
     if not info:
         return None
-    age, ttl = now - info['at'], info['ttl'] or 3600  # TTL 근거가 파일 전체에 없으면 1h로 본다
-    level = ('ok' if info['compacted'] or info['ctx'] < CTX_WARN or age < ttl - min(WARN_LEFT, ttl // 4)
-             else 'warn' if age < ttl else 'expired')
-    return {'age': int(age), 'left': int(ttl - age), 'ctx': info['ctx'], 'compacted': info['compacted'], 'level': level}
+    ttl, req = info['ttl'] or 3600, info.get('req')  # TTL 근거가 파일 전체에 없으면 1h로 본다
+    age, since = now - info['at'], now - (req or info['at'])
+    level = ('ok' if info['compacted'] or info['ctx'] < CTX_WARN or since < ttl - (WARN_LEFT if ttl >= 3600 else ttl // 4)
+             else 'warn' if since < ttl else 'expired')
+    gap = None if req is None else int(req - info['at'])
+    return {'age': int(age), 'left': int(ttl - since), 'ctx': info['ctx'], 'compacted': info['compacted'], 'level': level,
+            'gap': gap, 'miss': gap is not None and not info['compacted'] and gap >= ttl,
+            'big': not info['compacted'] and info['ctx'] >= COMPACT_CTX, 'ttl': ttl}
 
 
 def transcript(sid):
@@ -167,8 +187,85 @@ def agents():
              'tab': tabs.get(a.get('tab_id')) or a.get('tab_id'),
              'cwd': Path(a.get('cwd', '')).name,
              'seq': a.get('state_change_seq', 0),
-             'cache': cache_state(transcript((a.get('agent_session') or {}).get('value')), now) if a.get('agent') == 'claude' else None}
+             'pane': a.get('pane_id'),
+             'sid': (sid := (a.get('agent_session') or {}).get('value')),
+             'auto': (AUTO_SENT.get(sid) or (None, None))[1],
+             'nocompact': sid in NOCOMPACT,
+             'cache': cache_state(transcript(sid), now) if a.get('agent') == 'claude' else None}
             for a in data], None
+
+
+def compact_due(status, c, quota):
+    """자동 compact 대상인가. 대기·완료(작업 중이면 입력이 끼어들고, blocked는 herdr가 거부) + 만료 임박(warn) 중 남은 시간 AUTO_LEFT 이하(cache가 살아 있어 compact가 싸다,
+    만료 뒤면 compact 요청 자체가 context 전체를 다시 처리) + context AUTO_CTX 이상 + 응답 대기 요청 없음 + 사용량 여유(모르면 진행)
+    + 1h TTL만 — 보통 세션은 1h인데 드물게 섞이는 5분 cache 쓰기가 마지막이면 5분으로 잡혀 약 4분 만에 compact된다."""
+    return (status in ('idle', 'done') and c is not None and c.get('ttl') == 3600 and c['level'] == 'warn' and c['left'] <= AUTO_LEFT and not c['compacted']
+            and c['ctx'] >= AUTO_CTX and c['gap'] is None and (quota is None or quota['5h'] < AUTO_QUOTA))
+
+
+def input_empty(screen):
+    """pane 화면 끝 → Claude Code 입력줄(`❯`)이 비었나. 쳐 둔 글이 있으면 /compact가 그 뒤에 붙는다. 입력줄을 못 찾으면 False(안 보냄).
+    여러 줄 입력이면 `❯` 줄 아래 줄에도 글이 있다 — 입력 칸 아래 구분선(`─`)까지 모두 비어야 빈 것으로 본다."""
+    lines = screen.splitlines()
+    for i in range(len(lines) - 1, -1, -1):
+        if lines[i].lstrip().startswith('❯'):
+            box = [lines[i].lstrip()[1:]]
+            for l in lines[i + 1:]:
+                if l.lstrip().startswith('─'):
+                    break
+                box.append(l)
+            return not ''.join(box).strip()
+    return False
+
+
+def autocompactor():
+    """AUTO_EVERY마다 compact_due + 입력줄이 빈 세션 하나에 /compact. 한 번에 하나, 같은 답변 시점엔 한 번.
+    입력줄 조회(최대 5초) 사이 만료·예외 버튼·새 요청이 생길 수 있어 보내기 직전 transcript로 다시 판정한다."""
+    while True:
+        time.sleep(AUTO_EVERY)
+        try:
+            items, _ = agents()
+            quota = claude_quota()
+            for a in items:
+                sid = a['sid']
+                if not sid or sid in NOCOMPACT or not compact_due(a['status'], a['cache'], quota):
+                    continue
+                info = transcript(sid)
+                if not info or (AUTO_SENT.get(sid) or (None,))[0] == info['at']:
+                    continue
+                r = subprocess.run(['herdr', 'pane', 'read', a['pane'], '--lines', '15'], capture_output=True, text=True, timeout=5)
+                if r.returncode or not input_empty(r.stdout):
+                    continue
+                info = transcript(sid)
+                c = cache_state(info, time.time())
+                if sid in NOCOMPACT or not compact_due(a['status'], c, quota) or c['left'] < AUTO_MIN_LEFT:
+                    continue
+                AUTO_SENT[sid] = (info['at'], time.strftime('%H:%M'))
+                r = subprocess.run(['herdr', 'agent', 'prompt', a['pane'], '/compact'], capture_output=True, text=True, timeout=10)
+                print(f"autocompact {time.strftime('%F %T')} {a['pane']} {a['name']!r} ctx={a['cache']['ctx']} rc={r.returncode} "
+                      f"{(r.stderr or r.stdout).strip()[-200:] if r.returncode else ''}", flush=True)
+                break
+        except Exception as e:  # 한 번 실패로 스레드가 죽지 않게
+            print(f'autocompactor: {type(e).__name__}: {e}', flush=True)
+
+
+def load_nocompact():
+    try:
+        return set(json.loads(NOCOMPACT_FILE.read_text(encoding='utf-8')))
+    except Exception:  # 없거나 깨졌으면 예외 없음
+        return set()
+
+
+NOCOMPACT = load_nocompact()
+
+
+def set_nocompact(sid, off):
+    """화면 버튼: off=True면 이 세션을 자동 compact에서 뺀다. 파일에 남겨 서버를 다시 띄워도 유지."""
+    if not re.fullmatch(r'[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}', str(sid)) or not isinstance(off, bool):
+        raise ValueError('sid/off')
+    (NOCOMPACT.add if off else NOCOMPACT.discard)(sid)
+    NOCOMPACT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    NOCOMPACT_FILE.write_text(json.dumps(sorted(NOCOMPACT)), encoding='utf-8')
 
 
 def account():
@@ -398,7 +495,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send(404, {'error': 'not found'})
 
     def do_POST(self):
-        if self.path != '/api/checklist':
+        if self.path not in ('/api/checklist', '/api/nocompact'):
             return self.send(404, {'error': 'not found'})
         # 같은 PC 브라우저의 다른 페이지가 보내는 simple request(text/plain 등)를 막는다 — CORS preflight가 필요한 JSON만 받는다
         if self.headers.get('Content-Type', '').split(';')[0].strip() != 'application/json':
@@ -409,7 +506,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(413, {'error': 'body too large'})
             op = json.loads(self.rfile.read(size))
             with LOCK:
-                write_lines(apply(read_lines(), op))
+                if self.path == '/api/nocompact':
+                    set_nocompact(op['sid'], op['off'])
+                else:
+                    write_lines(apply(read_lines(), op))
         except Conflict:
             return self.send(409, state())
         except (KeyError, ValueError, TypeError) as e:
@@ -425,4 +525,6 @@ if __name__ == '__main__':
         CHECKLIST.write_text(SAMPLE.read_text(encoding='utf-8'), encoding='utf-8')  # 데모: 추적 파일을 직접 고치지 않게 사본에 쓴다
     print(f'checklist={CHECKLIST.resolve()} http://127.0.0.1:{PORT}', flush=True)
     threading.Thread(target=sampler, daemon=True).start()
+    if AUTO:
+        threading.Thread(target=autocompactor, daemon=True).start()
     ThreadingHTTPServer(('127.0.0.1', PORT), Handler).serve_forever()

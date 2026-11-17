@@ -63,6 +63,7 @@
   /* 에이전트 행: 완료(done)는 옅은 배경으로 띄우고, 작업 중은 회색으로 물러나게 */
   #agents li, #expired li { padding:6px 8px; border-radius:8px; }
   .dot { width:14px; height:14px; border-radius:50%; flex:none; background:var(--other); }
+  .s-idle .dot { background:var(--idle); }  /* 대기 묶음 — 만료(빨강)와 구분 */
   .s-done { background:var(--attn-bg); }
   .s-done .dot { background:var(--attn); }
   .s-working .dot { width:10px; height:10px; margin:0 2px; background:var(--idle); animation:ring 2.4s ease-out infinite; }
@@ -91,6 +92,9 @@
   .cache { font-size:12px; color:var(--dim); font-variant-numeric:tabular-nums; }
   .cache.warn { color:var(--warn); font-weight:600; }
   .cache.expired { color:var(--other); }
+  .cache .big { color:var(--fg); }
+  .cache .nc { font:inherit; font-size:11px; margin-left:6px; padding:0 6px; border:1px solid var(--dim); border-radius:8px; background:none; color:var(--fg); cursor:pointer; }
+  .cache .nc.off { color:var(--warn); border-color:var(--warn); }
   #toast { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); background:var(--other); color:#fff; padding:8px 16px; border-radius:8px; display:none; }
 
   /* PC 사용량 */
@@ -144,6 +148,7 @@
     <div class="err" id="aerr"></div>
     <ul id="agents"></ul>
     <details id="expbox" class="sub" hidden><summary><span class="meta">캐시 만료된 대기 세션 <b id="nexp">0</b> — 이어가려면 먼저 /compact</span></summary><ul id="expired"></ul></details>
+    <details id="idlebox" class="sub" hidden><summary><span class="meta">대기 세션 <b id="nidles">0</b> — 자동 compact 미리 끄기</span></summary><ul id="idles"></ul></details>
   </section>
   <section>
     <h2>체크리스트 — 남은 항목 <b id="left">-</b></h2>
@@ -298,13 +303,18 @@ function renderPosts(posts, err) {
 
 const dur = sec => sec < 60 ? '방금' : sec < 3600 ? `${Math.floor(sec / 60)}분` : `${Math.floor(sec / 3600)}시간 ${Math.floor(sec % 3600 / 60)}분`;
 // 마지막 답변부터 잰 prompt cache 상태 — warn이면 만료 전에 compact하거나 이어서 입력, expired면 다음 입력이 context 전체를 다시 처리
+// 입력 뒤 첫 응답 전(gap 있음)엔 이번 입력의 cache 적중·miss를 바로 보인다. 1분 미만 간격(작업 중 도구 단계)은 평소 줄
 function cacheLine(c) {
   const k = Math.round(c.ctx / 1000) + 'k';
   const text = c.compacted ? `답변 ${dur(c.age)} 전 · compact됨`
+             : c.miss ? `캐시 만료 뒤 입력 — ${k} 다시 처리 중`
+             : c.gap >= 60 ? `입력 · 캐시 적중(${dur(c.gap)} 만에) · ${k}`
              : c.level === 'warn' ? `⚠ 캐시 ${Math.max(1, Math.ceil(c.left / 60))}분 남음 · ${k} — compact 또는 이어서 입력`
              : c.level === 'expired' ? `캐시 만료(답변 ${dur(c.age)} 전) · 다음 입력 때 ${k} 다시 처리`
              : `답변 ${dur(c.age)} 전 · ${k}`;
-  return el('div', 'cache ' + c.level, text);
+  const box = el('div', 'cache ' + (c.miss ? 'expired' : c.level), text);
+  if (c.big) box.append(el('b', 'big', ' · compact 권장'));  // context가 커서 — 시간과 무관해 작업 중에도
+  return box;
 }
 
 // 맨 윗줄 시각 옆: 잔량 · 충전/방전 전력 · 완충/방전까지 남은 시간 · 수명(설계 용량 대비 현재 최대 용량)
@@ -367,7 +377,16 @@ function render(s) {
     const sub = el('div', 'meta', a.agent + (cls !== a.status ? ` · ${LABEL[a.status] ?? a.status}` : ''));
     sub.title = sub.textContent;
     body.append(name, sub);
-    if (a.cache) { const c = cacheLine(a.cache); c.title = c.textContent; body.append(c); }
+    // 자동 compact 예외 토글 — 열어 두고 계속 볼 세션만 끈다(서버가 파일에 기억). Claude 세션이면 cache 줄 유무와 상관없이 늘 보인다
+    const nc = el('button', 'nc' + (a.nocompact ? ' off' : ''), a.nocompact ? '자동 compact 끔' : '자동 compact');
+    nc.title = a.nocompact ? '눌러서 다시 자동 compact 대상으로' : '눌러서 이 세션은 자동 compact 안 함';
+    nc.onclick = ev => { ev.stopPropagation(); toggleNC(a.sid, !a.nocompact); };
+    const hasNC = a.agent === 'claude' && a.sid;
+    if (a.cache) {
+      const c = cacheLine(a.cache); if (a.auto) c.append(el('b', 'big', ` · 자동 compact ${a.auto}`)); c.title = c.textContent;
+      if (hasNC) c.append(nc);
+      body.append(c);
+    } else if (hasNC) sub.append(nc);
     li.append(el('span', 'dot'), body, el('span', 'status', status));
     return li;
   };
@@ -376,7 +395,12 @@ function render(s) {
   $('expbox').hidden = !expired.length;
   $('nexp').textContent = expired.length;
   $('expired').replaceChildren(...expired.map(a => row(a, 'expired', '만료')));
-  alignCols($('agents'), $('expired'));
+  // 숨긴 대기 세션도 접힌 묶음으로 — 자동 compact를 미리 꺼 둘 수 있게
+  const idles = s.agents.filter(a => a.status === 'idle' && !warn(a) && a.cache?.level !== 'expired').sort((a, b) => b.seq - a.seq);
+  $('idlebox').hidden = !idles.length;
+  $('nidles').textContent = idles.length;
+  $('idles').replaceChildren(...idles.map(a => row(a, 'idle', '대기')));
+  alignCols($('agents'), $('expired'), $('idles'));
   if (s.sys) renderSys(s.sys);  // 이전 버전 서버(재시작 전)는 sys·postings가 없다
   if (s.postings) renderPosts(s.postings, s.postings_error);
 }
@@ -415,7 +439,7 @@ function alignCols(...uls) {
     if (w) uls.forEach(u => u.style.setProperty('--w-' + k, w + 'px'));
   }
 }
-$('expbox').addEventListener('toggle', () => alignCols($('agents'), $('expired')));
+for (const id of ['expbox', 'idlebox']) $(id).addEventListener('toggle', () => alignCols($('agents'), $('expired'), $('idles')));
 
 // 마지막 성공 시각은 클라이언트 시계로 — 끊기면 서버 시각(#clock)도 멈추므로
 let lastOk = 0;
@@ -423,6 +447,13 @@ function online() {  // poll·저장 어느 쪽이든 서버 응답을 받아 �
   lastOk = Date.now(); document.body.classList.remove('offline');
   $('conn').className = ''; $('conn').textContent = '연결됨';
 }
+async function toggleNC(sid, off) {
+  try {
+    const r = await fetch('/api/nocompact', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sid, off }) });
+    if (r.ok) render(await r.json());
+  } catch (e) { /* 다음 poll이 연결 상태를 표시한다 */ }
+}
+
 async function poll() {
   try {
     render(await (await fetch('/api/state')).json()); online();
