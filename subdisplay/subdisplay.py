@@ -375,7 +375,7 @@ def battery_info(text):
             left = round(now / rate * 3600)
         elif status == 'Charging' and full:
             left = round(max(full - now, 0) / rate * 3600)
-    watts = rate / 1e6 if unit == 'ENERGY' else (rate * volt / 1e12 if rate and volt else None)
+    watts = (rate / 1e6 if rate else None) if unit == 'ENERGY' else (rate * volt / 1e12 if rate and volt else None)  # 완충 등 전력 0·없음이면 None
     return {'percent': num('CAPACITY'), 'status': status, 'watts': round(watts, 1) if watts else None,
             'left': left, 'health': round(100 * full / design) if full and design else None}
 

@@ -224,6 +224,8 @@ dis = '\n'.join(U + l for l in ['STATUS=Discharging', 'CAPACITY=50', 'ENERGY_NOW
 assert battery_info(dis) == {'percent': 50, 'status': 'Discharging', 'watts': 15.0, 'left': 7200, 'health': 83}
 assert battery_info(U + 'STATUS=Full\n' + U + 'CAPACITY=100') == {'percent': 100, 'status': 'Full', 'watts': None, 'left': None, 'health': None}
 assert battery_info(U + 'STATUS=Discharging\n' + U + 'CAPACITY=40\n' + U + 'CHARGE_NOW=1000\n' + U + 'CURRENT_NOW=0')['left'] is None  # 전류 0
+assert battery_info(U + 'STATUS=Full\n' + U + 'ENERGY_NOW=5\n' + U + 'POWER_NOW=0')['watts'] is None  # energy 계열 전력 0(완충) — 예외 나면 /api/state 전체 실패
+assert battery_info(U + 'STATUS=Full\n' + U + 'ENERGY_NOW=5')['watts'] is None  # 전력 값 없음
 print('OK5')
 
 # 자동 compact 대상 판정·입력줄 검사
