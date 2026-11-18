@@ -480,25 +480,37 @@ def state():
             'file': str(CHECKLIST), 'now': time.strftime('%H:%M:%S')}
 
 
-MACHINE = socket.gethostname().lower()  # 보통 tailnet 기기 이름과 같다 — 다르면 짧은 이름 접속만 403
+# tailnet 기기 이름 — 보통 hostname과 같다. 다르면 SUBDISPLAY_HOSTNAME으로 지정(안 하면 짧은 이름·ts.net 이름 접속이 403)
+MACHINE = os.environ.get('SUBDISPLAY_HOSTNAME', socket.gethostname()).lower()
 TAILNET_IP = re.compile(r'100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}')  # Tailscale 주소 대역 100.64.0.0/10
+HOST = re.compile(r'([^:\[\]]+?)\.?(?::\d{1,5})?')  # 이름(끝 점 하나 허용) + 숫자 포트. IPv6 [..]는 맞지 않아 거부
 
 
 def host_ok(host):
     """요청 Host가 이 PC를 가리키는 이름인가 — 127.0.0.1·localhost·기기 이름(짧은 이름·<이름>.<tailnet>.ts.net)·tailnet IP.
     악성 웹사이트가 자기 도메인을 이 PC 주소로 바꿔치기(DNS rebinding)해 화면 내용을 읽거나 고치는 것을 막는다.
     tailscale serve를 Host 검사 없는 TCP로 넘겨 IP로 접속하는 경우(브라우저 보안 DNS가 ts.net 이름을 못 찾을 때)에도 이 검사가 지킨다."""
-    h = (host or '').strip().lower()
-    h = h[:h.rindex(':')] if ':' in h and not h.endswith(']') else h  # 포트 제거(IPv6 [..]는 그대로)
-    return (h in ('127.0.0.1', 'localhost', MACHINE) or bool(TAILNET_IP.fullmatch(h))
+    m = HOST.fullmatch((host or '').strip().lower())
+    if not m:
+        return False
+    h = m[1]
+    return (h in ('127.0.0.1', 'localhost', MACHINE)
+            or (bool(TAILNET_IP.fullmatch(h)) and all(int(x) <= 255 for x in h.split('.')))
             or (h.startswith(MACHINE + '.') and h.endswith('.ts.net')))
 
 
+def json_type(headers):
+    """Content-Type이 정확히 application/json(대소문자·charset 무관) 하나인가 — application/jsonp 등·여러 개는 아님"""
+    v = headers.get_all('Content-Type') or []
+    return len(v) == 1 and v[0].split(';')[0].strip().lower() == 'application/json'
+
+
 class Handler(BaseHTTPRequestHandler):
-    def parse_request(self):  # 모든 요청 앞에서 Host 검사
+    def parse_request(self):  # 모든 요청 앞에서 Host 검사 — Host가 정확히 하나여야 한다(여러 개면 앞뒤 해석이 갈린다)
         if not super().parse_request():
             return False
-        if not host_ok(self.headers.get('Host')):
+        hosts = self.headers.get_all('Host') or []
+        if len(hosts) != 1 or not host_ok(hosts[0]):
             self.send(403, {'error': 'host'})
             return False
         return True
@@ -525,7 +537,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path not in ('/api/checklist', '/api/nocompact'):
             return self.send(404, {'error': 'not found'})
         # 같은 PC 브라우저의 다른 페이지가 보내는 simple request(text/plain 등)를 막는다 — CORS preflight가 필요한 JSON만 받는다
-        if self.headers.get('Content-Type', '').split(';')[0].strip() != 'application/json':
+        if not json_type(self.headers):
             return self.send(415, {'error': 'Content-Type must be application/json'})
         try:
             size = int(self.headers.get('Content-Length', 0))

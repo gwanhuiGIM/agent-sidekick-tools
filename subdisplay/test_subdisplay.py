@@ -211,13 +211,22 @@ with tempfile.TemporaryDirectory() as tmp:
     def get_host(host):
         c = __import__('http.client').client.HTTPConnection('127.0.0.1', srv.server_address[1], timeout=5)
         c.putrequest('GET', '/api/state', skip_host=True)
-        if host is not None:
-            c.putheader('Host', host)
+        for h in ([] if host is None else [host] if isinstance(host, str) else host):  # 목록이면 Host 여러 개
+            c.putheader('Host', h)
         c.endheaders(); s = c.getresponse().status; c.close(); return s
     assert get_host('evil.com') == 403 and get_host(None) == 403 and get_host('100.64.0.1:8765') == 200
+    assert get_host(['localhost', 'evil.com']) == 403 and get_host(['evil.com', 'localhost']) == 403  # Host 여러 개
     M = fresh.MACHINE
-    assert all(fresh.host_ok(h) for h in ['127.0.0.1:8765', 'localhost', '100.127.255.255', M, f'{M}.tailabc.ts.net', f'{M.upper()}.tailabc.ts.net:443'])
-    assert not any(fresh.host_ok(h) for h in ['', 'evil.com', '100.63.0.1', '100.128.0.1', f'{M}.evil.com', f'x{M}.tailabc.ts.net', 'evil.ts.net', '100.65.0.1.evil.com'])
+    assert all(fresh.host_ok(h) for h in ['127.0.0.1:8765', 'localhost', '100.127.255.255', M, f'{M}.tailabc.ts.net', f'{M.upper()}.tailabc.ts.net:443',
+                                          'localhost.', f'{M}.tailabc.ts.net.:443'])  # 끝 점(FQDN) 하나는 같은 이름
+    assert not any(fresh.host_ok(h) for h in ['', 'evil.com', '100.63.0.1', '100.128.0.1', f'{M}.evil.com', f'x{M}.tailabc.ts.net', 'evil.ts.net', '100.65.0.1.evil.com',
+                                              'localhost:evil', '100.64.999.999', '[fd7a:115c:a1e0::1]:8765', 'localhost..'])
+    assert post(add, 'application/jsonp') == 415 and post(add, 'Application/JSON') == 200  # 비슷한 다른 형식 거부, 대소문자 무관
+    raw = __import__('http.client').client.HTTPConnection('127.0.0.1', srv.server_address[1], timeout=5)
+    raw.putrequest('POST', '/api/checklist'); raw.putheader('Content-Type', 'application/json'); raw.putheader('Content-Type', 'text/plain')
+    raw.putheader('Content-Length', str(len(add))); raw.endheaders(add)
+    assert raw.getresponse().status == 415; raw.close()  # 형식 여러 개
+    ck.write_text('- [ ] A\n', encoding='utf-8')  # 위 'Application/JSON' 추가분 되돌림 — 아래 시험이 원래 내용을 기대
     assert post(add, 'application/json; charset=utf-8') == 200 and ck.read_text(encoding='utf-8') == '- [ ] A\n- [ ] B\n'
     assert len(json.loads(urllib.request.urlopen(url.replace('checklist', 'state')).read())['postings']) == 3  # example 공고
     srv.shutdown()
