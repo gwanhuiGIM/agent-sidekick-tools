@@ -25,7 +25,7 @@ python3 subdisplay.py      # http://127.0.0.1:8765, Ctrl+C로 종료
 ```
 - 기본 데이터는 `example/`입니다. 처음 실행하면 `example/checklist.sample.md`를 `example/checklist.md`로 복사해서 그 사본을 고칩니다(사본은 git에 들어가지 않음).
 - 환경변수: `SUBDISPLAY_CHECKLIST`(체크리스트 md 경로), `SUBDISPLAY_PORTFOLIO`(공고 폴더), `SUBDISPLAY_PORT`(기본 8765), `SUBDISPLAY_AUTOCOMPACT`(`1`이면 자동 compact 켬, 기본 꺼짐).
-- 태블릿에서 보기: 서버는 127.0.0.1에만 열립니다. `tailscale serve --bg 8765`로 같은 tailnet 안에서만 HTTPS로 엽니다. 인증은 서버 코드에 없고 Tailscale에 맡깁니다.
+- 태블릿에서 보기: 서버는 127.0.0.1에만 열립니다. `tailscale serve --bg 8765`로 같은 tailnet 안에서만 HTTPS로 엽니다. 인증은 서버 코드에 없고 Tailscale에 맡깁니다. 대신 서버는 요청 Host가 이 PC(127.0.0.1·localhost·기기 이름·`<기기>.<tailnet>.ts.net`·tailnet IP 100.64.0.0/10)일 때만 응답해 DNS rebinding을 막고(아니면 403), POST는 `application/json`만 받습니다. 브라우저 보안 DNS(광고 차단 DoH 등)가 `ts.net` 이름을 못 찾는 기기는 `sudo tailscale serve --bg --tcp 8765 tcp://localhost:8765`로 IP 입구를 열어 `http://<tailnet IP>:8765`로 들어올 수 있습니다(`--http`는 Host가 기기 이름일 때만 넘겨 IP로는 404).
 
 ### 요구 사항
 - Linux(`/proc`을 읽음), Python 3.10+

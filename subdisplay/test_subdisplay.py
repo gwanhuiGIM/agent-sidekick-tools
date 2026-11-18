@@ -207,6 +207,17 @@ with tempfile.TemporaryDirectory() as tmp:
     raw.putrequest('POST', '/api/checklist'); raw.putheader('Content-Type', 'application/json'); raw.putheader('Content-Length', '-1'); raw.endheaders()
     assert raw.getresponse().status == 413  # 음수 길이는 읽지 않고 거절
     raw.close()
+    # Host 검사(DNS rebinding) — 다른 도메인·Host 없음은 403, 이 PC 이름·tailnet IP는 통과
+    def get_host(host):
+        c = __import__('http.client').client.HTTPConnection('127.0.0.1', srv.server_address[1], timeout=5)
+        c.putrequest('GET', '/api/state', skip_host=True)
+        if host is not None:
+            c.putheader('Host', host)
+        c.endheaders(); s = c.getresponse().status; c.close(); return s
+    assert get_host('evil.com') == 403 and get_host(None) == 403 and get_host('100.64.0.1:8765') == 200
+    M = fresh.MACHINE
+    assert all(fresh.host_ok(h) for h in ['127.0.0.1:8765', 'localhost', '100.127.255.255', M, f'{M}.tailabc.ts.net', f'{M.upper()}.tailabc.ts.net:443'])
+    assert not any(fresh.host_ok(h) for h in ['', 'evil.com', '100.63.0.1', '100.128.0.1', f'{M}.evil.com', f'x{M}.tailabc.ts.net', 'evil.ts.net', '100.65.0.1.evil.com'])
     assert post(add, 'application/json; charset=utf-8') == 200 and ck.read_text(encoding='utf-8') == '- [ ] A\n- [ ] B\n'
     assert len(json.loads(urllib.request.urlopen(url.replace('checklist', 'state')).read())['postings']) == 3  # example 공고
     srv.shutdown()

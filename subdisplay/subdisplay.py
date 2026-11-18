@@ -7,6 +7,7 @@ python3 subdisplay.py   # 기본 example/checklist.md(없으면 checklist.sample
 import json
 import os
 import re
+import socket
 import subprocess
 import threading
 import time
@@ -479,7 +480,29 @@ def state():
             'file': str(CHECKLIST), 'now': time.strftime('%H:%M:%S')}
 
 
+MACHINE = socket.gethostname().lower()  # 보통 tailnet 기기 이름과 같다 — 다르면 짧은 이름 접속만 403
+TAILNET_IP = re.compile(r'100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}')  # Tailscale 주소 대역 100.64.0.0/10
+
+
+def host_ok(host):
+    """요청 Host가 이 PC를 가리키는 이름인가 — 127.0.0.1·localhost·기기 이름(짧은 이름·<이름>.<tailnet>.ts.net)·tailnet IP.
+    악성 웹사이트가 자기 도메인을 이 PC 주소로 바꿔치기(DNS rebinding)해 화면 내용을 읽거나 고치는 것을 막는다.
+    tailscale serve를 Host 검사 없는 TCP로 넘겨 IP로 접속하는 경우(브라우저 보안 DNS가 ts.net 이름을 못 찾을 때)에도 이 검사가 지킨다."""
+    h = (host or '').strip().lower()
+    h = h[:h.rindex(':')] if ':' in h and not h.endswith(']') else h  # 포트 제거(IPv6 [..]는 그대로)
+    return (h in ('127.0.0.1', 'localhost', MACHINE) or bool(TAILNET_IP.fullmatch(h))
+            or (h.startswith(MACHINE + '.') and h.endswith('.ts.net')))
+
+
 class Handler(BaseHTTPRequestHandler):
+    def parse_request(self):  # 모든 요청 앞에서 Host 검사
+        if not super().parse_request():
+            return False
+        if not host_ok(self.headers.get('Host')):
+            self.send(403, {'error': 'host'})
+            return False
+        return True
+
     def send(self, code, body, ctype='application/json; charset=utf-8'):
         b = body if isinstance(body, bytes) else json.dumps(body, ensure_ascii=False).encode()
         self.send_response(code)
