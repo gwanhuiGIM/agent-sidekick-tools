@@ -246,6 +246,7 @@ print('OK6')
 # 자동 compact 예외
 import subdisplay, tempfile
 subdisplay.NOCOMPACT_FILE = Path(tempfile.mkdtemp()) / 'nc.json'
+subdisplay.NOCOMPACT.clear()  # import 때 실제 ~/.cache 예외 목록을 읽어 온다 — 비워야 실사용 중에도 시험이 맞는다
 SID = '0123abcd-0000-0000-0000-000000000000'
 subdisplay.set_nocompact(SID, True)
 assert SID in subdisplay.load_nocompact()
