@@ -236,9 +236,13 @@ def autocompactor():
                 r = subprocess.run(['herdr', 'pane', 'read', a['pane'], '--lines', '15'], capture_output=True, text=True, timeout=5)
                 if r.returncode or not input_empty(r.stdout):
                     continue
+                # 입력줄 조회 사이 pane에 다른 세션이 떴거나 상태가 바뀌었을 수 있다 — herdr 목록을 다시 읽어 같은 세션·상태인지 확인
+                cur = next((x for x in agents()[0] if x['pane'] == a['pane']), None)
+                if not cur or cur['sid'] != sid:
+                    continue
                 info = transcript(sid)
                 c = cache_state(info, time.time())
-                if sid in NOCOMPACT or not compact_due(a['status'], c, quota) or c['left'] < AUTO_MIN_LEFT:
+                if sid in NOCOMPACT or not compact_due(cur['status'], c, quota) or c['left'] < AUTO_MIN_LEFT:
                     continue
                 AUTO_SENT[sid] = (info['at'], time.strftime('%H:%M'))
                 r = subprocess.run(['herdr', 'agent', 'prompt', a['pane'], '/compact'], capture_output=True, text=True, timeout=10)

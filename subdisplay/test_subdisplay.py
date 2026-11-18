@@ -265,14 +265,16 @@ import time
 import types
 NOW = time.time()
 INFO = {k: {'at': NOW - 3600 + 400, 'ctx': 200_000, 'ttl': 3600, 'compacted': False, 'req': None} for k in 'abc'}
+PANE = {}  # pane → (session id, 상태) 바꿔치기 — 입력줄 조회 사이 다른 세션이 뜨거나 상태가 바뀐 경우
 def fake_agents():
-    return ([dict(pane='p' + k, sid=k, name=k, status='working' if k == 'a' else 'idle', cache=cache_state(INFO[k], time.time())) for k in 'abc'], None)
-calls, hook = [], {}
+    return ([dict(pane='p' + k, sid=PANE.get(k, (k,))[0], name=k, status=PANE.get(k, (k, 'working' if k == 'a' else 'idle'))[1],
+                  cache=cache_state(INFO[k], time.time())) for k in 'abc'], None)
+calls, hook, RC = [], {}, {}
 def fake_run(cmd, **k):
     calls.append(cmd)
     if cmd[1] == 'pane' and cmd[3] in hook:
         hook.pop(cmd[3])()
-    return types.SimpleNamespace(returncode=0, stdout='❯ \n────' if cmd[1] == 'pane' else '', stderr='')
+    return types.SimpleNamespace(returncode=RC.get(cmd[3], 0) if cmd[1] == 'pane' else 0, stdout='❯ \n────' if cmd[1] == 'pane' else '', stderr='')
 def run_ticks(n):
     calls.clear()
     left = [n]
@@ -293,6 +295,19 @@ subdisplay.NOCOMPACT.clear(); subdisplay.NOCOMPACT.add('b'); subdisplay.AUTO_SEN
 assert run_ticks(3) == ['pc'], calls  # a 작업 중, b 예외, c 한 번만
 INFO['c']['at'] += 1  # 새 답변 → 다시 대상
 assert run_ticks(2) == ['pc']
+subdisplay.NOCOMPACT.clear(); subdisplay.AUTO_SENT.clear()
+assert run_ticks(1) == ['pb'], calls  # b·c 둘 다 대상이어도 한 주기에 하나
+for k, v in [('hook', lambda: INFO['b'].update(req=time.time())),  # 입력줄 조회 사이 새 요청
+             ('hook', lambda: PANE.update(b=('other-session', 'idle'))),  # 다른 세션이 뜸
+             ('hook', lambda: PANE.update(b=('b', 'working'))),  # 작업 시작
+             ('rc', 1)]:  # 입력줄 조회 실패
+    subdisplay.AUTO_SENT.clear()
+    if k == 'hook':
+        hook['pb'] = v
+    else:
+        RC['pb'] = v
+    assert run_ticks(1) == ['pc'], calls  # b는 건너뛰고 c로
+    INFO['b']['req'] = None; PANE.clear(); RC.clear()
 subdisplay.NOCOMPACT.clear(); subdisplay.AUTO_SENT.clear()
 hook['pb'] = lambda: INFO['b'].update(at=time.time() - 3600 + 20)  # 입력줄 조회 사이 만료 20초 전 → 안 보냄
 hook['pc'] = lambda: subdisplay.NOCOMPACT.add('c')  # 입력줄 조회 사이 예외 버튼 → 안 보냄
