@@ -32,13 +32,13 @@ PAGE_BYTES = os.sysconf('SC_PAGE_SIZE')
 LOCK = threading.Lock()  # ponytail: 프로세스 내 락만 — Obsidian 동시 편집은 expect 대조(409)로 막는다
 PROJECTS = Path('~/.claude/projects').expanduser()  # Claude Code transcript(<cwd 인코딩>/<session>.jsonl)
 CTX_WARN = 100_000  # 이 이상 context인 세션만 만료 경고 — 작으면 다시 읽어도 싸다
-COMPACT_CTX = 150_000  # 이 이상 context면 시간과 상관없이 'compact 권장' — 이어서 쓸수록 매 요청이 비싸다
+COMPACT_CTX = 120_000  # 이 이상 context면 시간과 상관없이 'compact 권장' — 이어서 쓸수록 매 요청이 비싸다
 WARN_LEFT = 20 * 60  # 만료까지 이만큼 남으면 경고 (1h TTL → 답변 40분 뒤). TTL이 짧으면 TTL의 1/4
 # 자동 compact — 만료 임박 구간(자리를 비운 지 40분+)의 큰 세션에 herdr로 /compact를 넣는다
 AUTO = os.environ.get('SUBDISPLAY_AUTOCOMPACT') == '1'  # 기본 꺼짐 — 실행 중인 agent 세션에 입력을 넣으므로 1로 켤 때만
-AUTO_CTX = 150_000  # 이 이상 context만 — 작으면 만료 뒤 다시 읽어도 싸고, compact 요약 손실이 더 크다
+AUTO_CTX = 120_000  # 이 이상 context만 — compact 비용(요약 출력)과 재개 뒤 절약(만료 뒤 재쓰기·요청마다 읽기가 compact 뒤 크기로 준다)의 기대 손익분기 근처. 작성자 transcript 추정(Opus 5.5 단가, 50분+ 쉰 100k+ 세션 재개율 약 38%)으로 약 124k — 재개율·사용 패턴에 따라 달라진다
 AUTO_QUOTA = 90  # Claude 5h 사용량 %가 이 이상이면 안 한다 — compact도 요청 하나(context 전체 cache read + 요약 출력)
-AUTO_LEFT = 7 * 60  # 초 — 만료까지 이만큼 남았을 때 보낸다(1h TTL이면 답변 53분 뒤). 판정 주기 60초 + compact 소요(69k 세션 실측 12초 — 150k 이상은 미실측)를 빼도 만료 전으로 본다
+AUTO_LEFT = 7 * 60  # 초 — 만료까지 이만큼 남았을 때 보낸다(1h TTL이면 답변 53분 뒤). 판정 주기 60초 + compact 소요(69k 세션 12초, 111~168k 세션 34~56초 실측)를 빼도 만료 전으로 본다
 AUTO_MIN_LEFT = 30  # 초 — 보내기 직전 다시 쟀을 때 이보다 적게 남았으면 안 보낸다(입력줄 조회 사이 만료 방지)
 AUTO_EVERY = 60  # 초 — 판정 주기
 NOCOMPACT_FILE = Path('~/.cache/subdisplay-nocompact.json').expanduser()  # 자동 compact 예외 session id 목록 — 화면 버튼으로 켜고 끈다

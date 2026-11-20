@@ -130,7 +130,7 @@ assert (st['gap'], st['miss'], st['level'], st['left'], st['age']) == (3000, Fal
 assert [cache_state(dict(i, req=T0 + s), T0 + 3700)['miss'] for s in (3599, 3600)] == [False, True]  # 경계
 assert cache_state(dict(i, req=T0 + 2 * 3600), T0 + 2 * 3600 + 10)['level'] == 'ok'  # miss여도 다시 쓴 cache는 새것
 assert cache_state(dict(i, req=T0 + 3600, compacted=True), T0 + 3700)['miss'] is False  # compact 뒤엔 판정 안 함
-assert [cache_state(dict(i, ctx=n), T0)['big'] for n in (149_999, 150_000)] == [False, True]
+assert [cache_state(dict(i, ctx=n), T0)['big'] for n in (119_999, 120_000)] == [False, True]
 assert cache_state(dict(i, compacted=True), T0)['big'] is False
 
 # transcript(): 끝만 읽다가 큰 줄에 가려지면 범위를 넓혀 파일 전체까지 본다
@@ -250,10 +250,10 @@ print('OK5')
 
 # 자동 compact 대상 판정·입력줄 검사
 from subdisplay import compact_due, input_empty
-W = {'level': 'warn', 'compacted': False, 'ctx': 150_000, 'gap': None, 'left': 420, 'ttl': 3600}
+W = {'level': 'warn', 'compacted': False, 'ctx': 120_000, 'gap': None, 'left': 420, 'ttl': 3600}
 assert compact_due('idle', W, None) and compact_due('done', W, {'5h': 89})
 assert not compact_due('working', W, None) and not compact_due('blocked', W, None)
-assert not compact_due('idle', dict(W, ctx=149_999), None)  # 기준 150k
+assert not compact_due('idle', dict(W, ctx=119_999), None)  # 기준 120k
 assert not compact_due('idle', dict(W, ttl=300, left=60), None)  # 1h TTL만
 assert not compact_due('idle', dict(W, left=421), None) and compact_due('idle', dict(W, left=1), None)  # 만료 7분 전부터
 assert not compact_due('idle', dict(W, level='ok'), None) and not compact_due('idle', dict(W, level='expired'), None)  # 만료 뒤엔 안 함
